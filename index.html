@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨韵 · 水墨画绘制</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── 画廊 ── -->
+<section id="view-gallery" class="view">
+  <div class="gallery-inner">
+    <div class="gallery-body">
+      <div id="gallery-grid" class="gallery-grid">
+        <div id="btn-new" class="new-card" title="新建画卷">
+          <span class="new-plus">＋</span>
+          <span class="new-text">新建画卷</span>
+        </div>
+      </div>
+      <p id="gallery-empty" class="gallery-empty hidden">画廊空空 ， 研墨以待 。</p>
+    </div>
+    <aside class="brand">
+      <h1 class="brand-title">墨韵</h1>
+      <div class="brand-seal">墨</div>
+      <p class="brand-sub">笔 墨 纸 水 · 皆有灵性</p>
+    </aside>
+  </div>
+  <footer class="gallery-foot">留白处 ， 皆是画</footer>
+</section>
+
+<!-- ── 绘制 ── -->
+<section id="view-paint" class="view hidden">
+  <aside id="toolbar"></aside>
+  <main id="stage">
+    <canvas id="paper" width="1000" height="1390"></canvas>
+    <div class="work-title-wrap">
+      <input id="work-title" class="work-title" maxlength="10" spellcheck="false" autocomplete="off">
+      <div class="title-seal">韵</div>
+    </div>
+  </main>
+</section>
+
+<!-- 题款钤印 -->
+<div id="inscribe-modal" class="modal hidden">
+  <div class="modal-card">
+    <h3>题款钤印</h3>
+    <label>题词（以空格分列，竖排自右而左）
+      <input id="ins-text" maxlength="40" spellcheck="false" autocomplete="off" placeholder="兴来每独往 胜事空自知">
+    </label>
+    <label>印文（一至四字）
+      <input id="ins-seal" maxlength="4" spellcheck="false" autocomplete="off" placeholder="墨韵">
+    </label>
+    <div class="modal-actions">
+      <button id="ins-cancel">作罢</button>
+      <button id="ins-ok">落款</button>
+    </div>
+  </div>
+</div>
+
+<div id="cursor-ring"></div>
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

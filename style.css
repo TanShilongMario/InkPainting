@@ -1,0 +1,555 @@
+/* ───────────────────── 墨韵 · 样式 ───────────────────── */
+
+:root {
+  --bg: #ece6d8;
+  --ink: #3a352d;
+  --ink-soft: #8d857a;
+  --ink-faint: #b5ac9d;
+  --cinnabar: #9e3b26;
+  --line: #d3cab7;
+  --serif: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+  --brush: 'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', cursive;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 30%, rgba(255, 252, 244, 0.5), transparent 70%),
+    radial-gradient(ellipse 60% 50% at 80% 90%, rgba(190, 178, 152, 0.18), transparent 70%),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+.view { position: fixed; inset: 0; }
+.hidden { display: none !important; }
+
+::selection { background: rgba(158, 59, 38, 0.18); }
+
+/* ───────────── 画廊 ───────────── */
+
+#view-gallery {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden auto;
+}
+
+.gallery-inner {
+  flex: 1;
+  display: flex;
+  padding: 72px 80px 24px 88px;
+  gap: 64px;
+  min-height: 0;
+}
+
+.gallery-body { flex: 1; }
+
+.brand {
+  flex: none;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  gap: 22px;
+  padding-top: 8px;
+}
+
+.brand-title {
+  margin: 0;
+  font-family: var(--brush);
+  font-weight: 400;
+  font-size: 76px;
+  line-height: 1;
+  writing-mode: vertical-rl;
+  letter-spacing: 22px;
+  color: var(--ink);
+}
+
+.brand-seal {
+  width: 38px;
+  height: 38px;
+  margin-top: 230px;
+  background: var(--cinnabar);
+  color: #f3ecda;
+  font-family: var(--brush);
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(158, 59, 38, 0.3);
+}
+
+.brand-sub {
+  margin: 0;
+  writing-mode: vertical-rl;
+  letter-spacing: 9px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  padding-top: 10px;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 172px);
+  gap: 44px 40px;
+  align-content: start;
+}
+
+/* 新建画卷 */
+.new-card {
+  aspect-ratio: 1000 / 1390;
+  border: 1px dashed var(--ink-faint);
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  transition: all 0.35s ease;
+}
+
+.new-card:hover {
+  border-color: var(--cinnabar);
+  color: var(--cinnabar);
+  transform: translateY(-4px);
+}
+
+.new-plus { font-size: 30px; font-weight: 300; line-height: 1; }
+
+.new-text {
+  writing-mode: vertical-rl;
+  letter-spacing: 8px;
+  font-size: 15px;
+}
+
+/* 画作卡片 */
+.work-card { cursor: pointer; position: relative; }
+
+.work-thumb {
+  aspect-ratio: 1000 / 1390;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  background: #f4eedd;
+  box-shadow: 0 3px 18px rgba(80, 68, 45, 0.1);
+  transition: all 0.35s ease;
+}
+
+.work-card:hover .work-thumb {
+  transform: translateY(-5px);
+  box-shadow: 0 12px 28px rgba(80, 68, 45, 0.18);
+}
+
+.work-thumb img { width: 100%; height: 100%; display: block; }
+
+.work-meta {
+  margin-top: 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.work-name {
+  font-family: var(--brush);
+  font-size: 17px;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.work-date { font-size: 11px; color: var(--ink-faint); flex: none; }
+
+.work-del {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(58, 53, 45, 0.55);
+  color: #ece6d8;
+  font-size: 12px;
+  font-family: var(--serif);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.work-card:hover .work-del { opacity: 1; }
+.work-del:hover { background: var(--cinnabar); }
+
+.gallery-empty {
+  margin-top: 18vh;
+  text-align: center;
+  font-family: var(--brush);
+  font-size: 26px;
+  letter-spacing: 10px;
+  color: var(--ink-faint);
+}
+
+.gallery-foot {
+  flex: none;
+  text-align: center;
+  padding: 20px 0 28px;
+  font-size: 12px;
+  letter-spacing: 8px;
+  color: var(--ink-faint);
+}
+
+/* ───────────── 绘制 ───────────── */
+
+#view-paint { display: flex; }
+
+#toolbar {
+  flex: none;
+  width: 112px;
+  padding: 26px 0 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+#toolbar::-webkit-scrollbar { display: none; }
+
+.tool-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+}
+
+.g-label {
+  font-family: var(--brush);
+  font-size: 17px;
+  color: var(--ink-soft);
+  letter-spacing: 4px;
+  padding: 0 4px 3px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* 笔 */
+.brush-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  border-left: 2px solid transparent;
+  transition: color 0.25s, border-color 0.25s;
+}
+
+.brush-item .b-name { font-size: 14px; letter-spacing: 2px; }
+.brush-item .b-sub { font-size: 11px; color: var(--ink-faint); letter-spacing: 1px; }
+
+.brush-item:hover { color: var(--ink); }
+
+.brush-item.sel {
+  color: var(--ink);
+  border-left-color: var(--cinnabar);
+}
+
+.brush-item.sel .b-sub { color: var(--cinnabar); }
+
+/* 墨 / 色 圆点 */
+.dot-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  max-width: 76px;
+}
+
+.ink-dot, .color-dot {
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 1px solid rgba(58, 53, 45, 0.18);
+  transition: transform 0.2s, box-shadow 0.2s;
+  position: relative;
+}
+
+.ink-dot:hover, .color-dot:hover { transform: scale(1.18); }
+
+.ink-dot.sel, .color-dot.sel {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--cinnabar);
+}
+
+.dot-name {
+  position: absolute;
+  left: 50%;
+  top: -26px;
+  transform: translateX(-50%);
+  background: rgba(58, 53, 45, 0.88);
+  color: #ede7d8;
+  font-size: 10px;
+  letter-spacing: 2px;
+  padding: 2px 7px;
+  border-radius: 2px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 10;
+}
+
+.ink-dot:hover .dot-name, .color-dot:hover .dot-name,
+.paper-item:hover .dot-name { opacity: 1; }
+
+/* 清水笔 */
+.water-item {
+  font-size: 14px;
+  letter-spacing: 4px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 4px 14px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  transition: all 0.25s;
+}
+
+.water-item:hover { color: #4a6a82; }
+
+.water-item.sel {
+  color: #f0ebdd;
+  background: #5c7a90;
+  border-color: #5c7a90;
+}
+
+/* 纸 */
+.paper-item {
+  width: 26px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 1px;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.2s;
+}
+
+.paper-item:hover { transform: translateY(-2px); }
+
+.paper-item.sel { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--cinnabar); }
+
+.paper-row { display: flex; gap: 9px; }
+
+/* 操作 */
+.action-group { margin-top: auto; gap: 10px; }
+
+.action-btn {
+  background: none;
+  border: none;
+  font-family: var(--serif);
+  font-size: 13px;
+  letter-spacing: 5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 3px 0 3px 5px;
+  transition: color 0.25s;
+}
+
+.action-btn:hover { color: var(--cinnabar); }
+
+.action-btn.primary { color: var(--ink); }
+.action-btn.primary:hover { color: var(--cinnabar); }
+
+.action-sep {
+  width: 30px;
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+
+/* 画布舞台 */
+#stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 0;
+}
+
+#paper {
+  height: min(92vh, calc((100vw - 300px) * 1.39));
+  width: auto;
+  box-shadow:
+    0 1px 2px rgba(70, 58, 38, 0.08),
+    0 10px 48px rgba(70, 58, 38, 0.18);
+  border-radius: 1px;
+  cursor: none;
+}
+
+/* 题名 */
+.work-title-wrap {
+  position: absolute;
+  top: 48px;
+  right: 42px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.work-title {
+  writing-mode: vertical-rl;
+  font-family: var(--brush);
+  font-size: 25px;
+  letter-spacing: 7px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-right: 1px solid transparent;
+  outline: none;
+  width: 36px;
+  max-height: 320px;
+  text-align: start;
+  transition: border-color 0.3s;
+}
+
+.work-title:hover, .work-title:focus { border-right-color: var(--line); }
+
+.title-seal {
+  width: 26px;
+  height: 26px;
+  background: var(--cinnabar);
+  color: #f3ecda;
+  font-family: var(--brush);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  opacity: 0.92;
+}
+
+/* ───────────── 题款钤印弹窗 ───────────── */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(60, 52, 40, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+}
+
+.modal-card {
+  background: #f3edde;
+  border: 1px solid var(--line);
+  padding: 30px 36px 24px;
+  width: 360px;
+  box-shadow: 0 14px 50px rgba(50, 42, 26, 0.3);
+  border-radius: 2px;
+}
+
+.modal-card h3 {
+  font-family: var(--brush);
+  font-weight: 400;
+  font-size: 23px;
+  letter-spacing: 7px;
+  margin: 0 0 22px;
+  color: var(--ink);
+}
+
+.modal-card label {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-soft);
+  letter-spacing: 3px;
+  margin-bottom: 16px;
+}
+
+.modal-card input {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--serif);
+  font-size: 15px;
+  letter-spacing: 2px;
+  padding: 6px 2px;
+  outline: none;
+  color: var(--ink);
+}
+
+.modal-card input:focus { border-bottom-color: var(--cinnabar); }
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 22px;
+  margin-top: 24px;
+}
+
+.modal-actions button {
+  background: none;
+  border: none;
+  font-family: var(--serif);
+  font-size: 14px;
+  letter-spacing: 4px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  padding: 4px 2px;
+}
+
+.modal-actions button:hover { color: var(--ink); }
+
+#ins-ok { color: var(--cinnabar); }
+#ins-ok:hover { color: #7c2c1b; }
+
+/* ───────────── 笔锋光标 / 提示 ───────────── */
+
+#cursor-ring {
+  position: fixed;
+  border: 1px solid rgba(58, 53, 45, 0.6);
+  border-radius: 50%;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 60;
+}
+
+#cursor-ring.water { border-color: rgba(74, 106, 130, 0.85); border-style: dashed; }
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  background: rgba(58, 53, 45, 0.92);
+  color: #f1ead9;
+  padding: 9px 26px;
+  letter-spacing: 5px;
+  font-size: 13px;
+  font-family: var(--serif);
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.35s;
+  pointer-events: none;
+  z-index: 70;
+}
+
+#toast.show { opacity: 1; }
