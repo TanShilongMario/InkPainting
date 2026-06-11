@@ -21,6 +21,56 @@ const BRUSHES = [
   { id: 'pomo',   name: '斗笔', sub: '泼墨', size: 104, varia: 0.5,  type: 'broad'   },
 ];
 
+const SIZE_TIERS = [
+  { id: 'nuo', name: '搦', sub: '细毫' },
+  { id: 'bao', name: '饱', sub: '饱毫' },
+  { id: 'kuo', name: '阔', sub: '阔笔' },
+  { id: 'ju',  name: '巨', sub: '巨笔' },
+];
+
+// 每笔四档：size / varia / 戳印间距 / 流体注入 / 散锋簇密
+const BRUSH_SIZE_TUNING = {
+  gongbi: {
+    nuo: { sizeMul: 0.5,  variaMul: 0.72, spacingMul: 0.88, depositMul: 0.42, bristleMul: 1    },
+    bao: { sizeMul: 1,    variaMul: 1,    spacingMul: 1,    depositMul: 1,    bristleMul: 1    },
+    kuo: { sizeMul: 1.42, variaMul: 0.9,  spacingMul: 1.06, depositMul: 1.12, bristleMul: 1    },
+    ju:  { sizeMul: 1.88, variaMul: 0.82, spacingMul: 1.12, depositMul: 1.22, bristleMul: 1    },
+  },
+  xieyi: {
+    nuo: { sizeMul: 0.52, variaMul: 0.78, spacingMul: 0.9,  depositMul: 0.62, bristleMul: 1    },
+    bao: { sizeMul: 1,    variaMul: 1,    spacingMul: 1,    depositMul: 1,    bristleMul: 1    },
+    kuo: { sizeMul: 1.48, variaMul: 1.06, spacingMul: 1.08, depositMul: 1.22, bristleMul: 1    },
+    ju:  { sizeMul: 2.08, variaMul: 1.12, spacingMul: 1.14, depositMul: 1.48, bristleMul: 1    },
+  },
+  cunca: {
+    nuo: { sizeMul: 0.52, variaMul: 0.82, spacingMul: 0.94, depositMul: 0.68, bristleMul: 0.82 },
+    bao: { sizeMul: 1,    variaMul: 1,    spacingMul: 1,    depositMul: 1,    bristleMul: 1    },
+    kuo: { sizeMul: 1.52, variaMul: 1.06, spacingMul: 1.1,  depositMul: 1.18, bristleMul: 1.18 },
+    ju:  { sizeMul: 2.12, variaMul: 1.14, spacingMul: 1.18, depositMul: 1.38, bristleMul: 1.38 },
+  },
+  pomo: {
+    nuo: { sizeMul: 0.55, variaMul: 0.86, spacingMul: 0.9,  depositMul: 0.72, bristleMul: 1    },
+    bao: { sizeMul: 1,    variaMul: 1,    spacingMul: 1,    depositMul: 1,    bristleMul: 1    },
+    kuo: { sizeMul: 1.5,  variaMul: 1.02, spacingMul: 1.1,  depositMul: 1.28, bristleMul: 1    },
+    ju:  { sizeMul: 2.18, variaMul: 1.1,  spacingMul: 1.16, depositMul: 1.58, bristleMul: 1    },
+  },
+};
+
+function brushProfile() {
+  const b = state.brush;
+  const tierId = state.sizeByBrush[b.id] || 'bao';
+  const tune = BRUSH_SIZE_TUNING[b.id][tierId] || BRUSH_SIZE_TUNING[b.id].bao;
+  return {
+    ...b,
+    tierId,
+    size: b.size * tune.sizeMul,
+    varia: b.varia * tune.variaMul,
+    spacingMul: tune.spacingMul,
+    depositMul: tune.depositMul,
+    bristleMul: tune.bristleMul,
+  };
+}
+
 const WETNESS = [
   { id: 'jiao',  name: '焦墨', alpha: 0.96, dry: 0.85, bleed: 0,    spread: 0    },
   { id: 'nong',  name: '浓墨', alpha: 0.84, dry: 0.3,  bleed: 0.15, spread: 0.08 },
@@ -62,12 +112,76 @@ for (const c of COLORS) {
   c.kG = (1 - c.g / 255) * 1.7 + 0.05;
   c.kB = (1 - c.b / 255) * 1.7 + 0.05;
 }
-const rgba = (c, a) => `rgba(${c.r},${c.g},${c.b},${a})`;
+const parseTint = hex => {
+  const n = parseInt(hex.slice(1), 16);
+  return { r: n >> 16 & 255, g: n >> 8 & 255, b: n & 255 };
+};
+
+// 墨级调制颜料：淡墨低饱和、高明度、融纸 —— 非线性设色（非 色×α 线性）
+function pigmentForInk(color, wet, paperTint) {
+  const t = clamp(wet.alpha, 0.05, 0.98);
+  const paper = parseTint(paperTint);
+  const chromatic = color.id !== 'xuanmo';
+
+  const pigment = Math.pow(t, chromatic ? 0.62 : 0.8);
+  const wash = 1 - pigment;
+
+  let r = color.r, g = color.g, b = color.b;
+
+  if (chromatic) {
+    const lum = color.r * 0.31 + color.g * 0.55 + color.b * 0.14;
+    const desatK = clamp(wash * 0.82 + wet.bleed * 0.12, 0, 0.9);
+    r = lerp(color.r, lum, desatK);
+    g = lerp(color.g, lum, desatK);
+    b = lerp(color.b, lum, desatK);
+
+    const paperK = Math.pow(wash, 0.55) * 0.85;
+    r = lerp(r, paper.r, paperK);
+    g = lerp(g, paper.g, paperK);
+    b = lerp(b, paper.b, paperK);
+
+    const lift = Math.pow(wash, 1.02) * 40;
+    r = clamp(r + lift, 0, 248);
+    g = clamp(g + lift, 0, 248);
+    b = clamp(b + lift * 0.86, 0, 248);
+  } else {
+    const paperK = Math.pow(wash, 0.68) * 0.58;
+    r = lerp(color.r, paper.r, paperK);
+    g = lerp(color.g, paper.g, paperK);
+    b = lerp(color.b, paper.b, paperK);
+    const lift = Math.pow(wash, 1.15) * 20;
+    r = clamp(r + lift, 0, 242);
+    g = clamp(g + lift, 0, 242);
+    b = clamp(b + lift, 0, 242);
+  }
+
+  return { r: r | 0, g: g | 0, b: b | 0, pigment, wash };
+}
+
+function pigmentCoeffs(color, wet, paperTint) {
+  const p = pigmentForInk(color, wet, paperTint);
+  return {
+    kR: (1 - p.r / 255) * 1.7 + 0.05,
+    kG: (1 - p.g / 255) * 1.7 + 0.05,
+    kB: (1 - p.b / 255) * 1.7 + 0.05,
+  };
+}
+
+const rgbaInk = (c, a) => {
+  const p = pigmentForInk(c, state.wet, state.paper.tint);
+  return `rgba(${p.r},${p.g},${p.b},${a})`;
+};
+
+const pigmentHex = c => {
+  const p = pigmentForInk(c, state.wet, state.paper.tint);
+  return `rgb(${p.r},${p.g},${p.b})`;
+};
 
 /* ───────────── 状态与画布 ───────────── */
 
 const state = {
   brush: BRUSHES[1],
+  sizeByBrush: { gongbi: 'bao', xieyi: 'bao', cunca: 'bao', pomo: 'bao' },
   wet: WETNESS[1],
   color: COLORS[0],
   paper: PAPERS[0],
@@ -97,9 +211,14 @@ strokeC.width = CANVAS_W; strokeC.height = CANVAS_H;
 const sctx = strokeC.getContext('2d');
 let strokePending = false;
 
-// 整笔压墨的透明度（墨级决定，越湿越交给流体层）
+// 整笔压墨的透明度；淡彩 RGB 已水化，略抬低墨级透明度以免过薄
 function strokeAlpha() {
-  return clamp(state.wet.alpha * (1 - state.wet.bleed * 0.25), 0.04, 0.97);
+  const { wet, color } = state;
+  let base = wet.alpha * (1 - wet.bleed * 0.25);
+  if (color.id !== 'xuanmo' && wet.alpha < 0.72) {
+    base += Math.pow((0.72 - wet.alpha) / 0.72, 0.85) * 0.2;
+  }
+  return clamp(base, 0.04, 0.97);
 }
 
 function commitStroke() {
@@ -191,7 +310,9 @@ function deposit(x, y, r, strength) {
   const x0 = Math.max(1, Math.floor(gx - gr)), x1 = Math.min(GW - 2, Math.ceil(gx + gr));
   const y0 = Math.max(1, Math.floor(gy - gr)), y1 = Math.min(GH - 2, Math.ceil(gy + gr));
   const wAmt = wet.bleed * 0.6 * strength;
-  const dAmt = wet.alpha * 0.25 * strength;
+  const chromatic = color.id !== 'xuanmo';
+  const dAmt = Math.pow(wet.alpha, chromatic ? 0.68 : 0.82) * 0.22 * strength;
+  const coeff = pigmentCoeffs(color, wet, state.paper.tint);
 
   for (let cy = y0; cy <= y1; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
@@ -200,12 +321,11 @@ function deposit(x, y, r, strength) {
       if (dist > 1) continue;
       const i = cy * GW + cx;
       const fall = 1 - dist;
-      // 水量随纤维渗透率起伏（打破圆形），颜料落墨更均匀
       water[i] = Math.min(2.5, water[i] + wAmt * fall * perm[i]);
       const fp = fall * (0.35 + 0.65 * Math.min(1, perm[i]));
-      pigR[i] += dAmt * fp * color.kR;
-      pigG[i] += dAmt * fp * color.kG;
-      pigB[i] += dAmt * fp * color.kB;
+      pigR[i] += dAmt * fp * coeff.kR;
+      pigG[i] += dAmt * fp * coeff.kG;
+      pigB[i] += dAmt * fp * coeff.kB;
     }
   }
   fluidDirty = true;
@@ -322,7 +442,8 @@ function paintPaper() {
 /* ───────────── 笔触引擎 ───────────── */
 
 function strokeWidth(vel) {
-  const { brush, wet } = state;
+  const { wet } = state;
+  const brush = brushProfile();
   const base = brush.size * (0.8 + wet.spread * 0.7);
   const f = clamp(1.15 - vel * 0.14 * brush.varia, 1 - brush.varia * 0.72, 1.18);
   return Math.max(1.2, base * f);
@@ -334,7 +455,8 @@ let strokeFade = 1;
 // 单个墨点戳印：实心笔腹 + 柔和墨缘，沿运笔方向略拉长成笔锋
 // 画入单笔缓冲，墨色深浅由 commitStroke 统一按墨级决定
 function stamp(x, y, r, vel, ang = 0) {
-  const { wet, color, brush } = state;
+  const { wet, color } = state;
+  const brush = brushProfile();
   const dry = clamp(wet.dry + vel * 0.05 * brush.varia, 0, 0.95);
   const alpha = (brush.type === 'broad' ? 0.78 : 0.88) * strokeFade;
 
@@ -353,10 +475,10 @@ function stamp(x, y, r, vel, ang = 0) {
     sctx.rotate(ang);
     sctx.scale(1, 0.82);
     const g = sctx.createRadialGradient(0, off, 0, 0, off, r);
-    g.addColorStop(0, rgba(color, a));
-    g.addColorStop(0.55, rgba(color, a * 0.9));
-    g.addColorStop(0.82, rgba(color, a * 0.4));
-    g.addColorStop(1, rgba(color, 0));
+    g.addColorStop(0, rgbaInk(color, a));
+    g.addColorStop(0.55, rgbaInk(color, a * 0.9));
+    g.addColorStop(0.82, rgbaInk(color, a * 0.4));
+    g.addColorStop(1, rgbaInk(color, 0));
     sctx.fillStyle = g;
     sctx.beginPath();
     sctx.arc(0, 0, r, 0, TAU);
@@ -365,8 +487,8 @@ function stamp(x, y, r, vel, ang = 0) {
     const ea = a * 0.3 * Math.abs(sideK);
     if (ea > 0.004) {
       const eg = sctx.createRadialGradient(0, off * 1.9, 0, 0, off * 1.9, r * 0.55);
-      eg.addColorStop(0, rgba(color, ea));
-      eg.addColorStop(1, rgba(color, 0));
+      eg.addColorStop(0, rgbaInk(color, ea));
+      eg.addColorStop(1, rgbaInk(color, 0));
       sctx.fillStyle = eg;
       sctx.beginPath();
       sctx.arc(0, off * 1.9, r * 0.55, 0, TAU);
@@ -378,7 +500,7 @@ function stamp(x, y, r, vel, ang = 0) {
   // 颗粒只在偏枯时显现（飞白与纸纹），湿墨保持流畅墨体
   if (dry > 0.18) {
     const n = Math.round(r * dry * 5);
-    sctx.fillStyle = color.hex;
+    sctx.fillStyle = pigmentHex(color);
     for (let i = 0; i < n; i++) {
       if (Math.random() < dry * 0.5) continue;
       const angr = rand(TAU), rr = Math.abs(gauss()) * r;
@@ -394,18 +516,18 @@ function stamp(x, y, r, vel, ang = 0) {
   if (wet.bleed > 0) {
     const sizeK = brush.type === 'fine' ? 0.22 : brush.type === 'soft' ? 0.5 : 1;
     deposit(x + gauss() * r * 0.4, y + gauss() * r * 0.4, r * (0.8 + Math.random() * 0.5),
-      (1 - dry) * (brush.type === 'broad' ? 1.4 : 1) * sizeK * strokeFade);
+      (1 - dry) * (brush.type === 'broad' ? 1.4 : 1) * sizeK * brush.depositMul * strokeFade);
   }
 }
 
 // 散锋：一束分叉的笔毫
 function makeBristles() {
-  // 笔毫成簇结块（开叉的旧笔），簇内紧、簇间疏，皴擦的肌理来自簇
+  const { bristleMul } = brushProfile();
   const arr = [];
-  const clumps = 3 + (Math.random() * 2 | 0);
+  const clumps = Math.max(2, Math.round((3 + (Math.random() * 2 | 0)) * bristleMul));
   for (let c = 0; c < clumps; c++) {
     const center = ((c + 0.5) / clumps * 2 - 1) * 0.72 + gauss() * 0.08;
-    const hairs = 2 + (Math.random() * 3 | 0);
+    const hairs = Math.max(1, Math.round((2 + (Math.random() * 3 | 0)) * Math.sqrt(bristleMul)));
     for (let h = 0; h < hairs; h++) {
       arr.push({
         off: clamp(center + gauss() * 0.07, -0.85, 0.85),
@@ -428,8 +550,8 @@ function drawBristles(p0, p1, w) {
   const midx = (p0.x + p1.x) / 2, midy = (p0.y + p1.y) / 2;
   const ba = 0.14 * strokeFade;
   const bg = sctx.createRadialGradient(midx, midy, 0, midx, midy, w * 0.5);
-  bg.addColorStop(0, rgba(color, ba));
-  bg.addColorStop(1, rgba(color, 0));
+  bg.addColorStop(0, rgbaInk(color, ba));
+  bg.addColorStop(1, rgbaInk(color, 0));
   sctx.fillStyle = bg;
   sctx.beginPath();
   sctx.arc(midx, midy, w * 0.5, 0, TAU);
@@ -437,8 +559,9 @@ function drawBristles(p0, p1, w) {
 
   const side = state.stroke.side || 1;
   sctx.lineCap = 'round';
-  sctx.strokeStyle = color.hex;
-  sctx.fillStyle = color.hex;
+  const ph = pigmentHex(color);
+  sctx.strokeStyle = ph;
+  sctx.fillStyle = ph;
   for (const b of state.stroke.bristles) {
     if (Math.random() < 0.03) b.gap = !b.gap;   // 笔毫起落
     if (b.gap) continue;
@@ -464,12 +587,14 @@ function drawBristles(p0, p1, w) {
   strokePending = true;
 
   if (wet.bleed > 0) {
-    deposit(p1.x + gauss() * w * 0.3, p1.y + gauss() * w * 0.3, w * 0.45, 0.6 * strokeFade);
+    const { depositMul } = brushProfile();
+    deposit(p1.x + gauss() * w * 0.3, p1.y + gauss() * w * 0.3, w * 0.45, 0.6 * depositMul * strokeFade);
   }
 }
 
 function stampSegment(p0, p1, vel) {
   const st = state.stroke;
+  const brush = brushProfile();
   const target = strokeWidth(vel);
   if (st.curW === undefined) st.curW = target;
   const dx = p1.x - p0.x, dy = p1.y - p0.y;
@@ -477,14 +602,13 @@ function stampSegment(p0, p1, vel) {
   if (d > 0.5) st.dir = Math.atan2(dy, dx);
   const ang = st.dir || 0;
 
-  if (state.brush.type === 'bristle') {
+  if (brush.type === 'bristle') {
     st.curW += (target - st.curW) * 0.3;
     drawBristles(p0, p1, st.curW);
   } else {
-    // 工笔先以连贯实线托底，确保线条不因鼠标采样断裂
-    if (state.brush.type === 'fine') {
+    if (brush.type === 'fine') {
       sctx.lineCap = 'round';
-      sctx.strokeStyle = state.color.hex;
+      sctx.strokeStyle = pigmentHex(state.color);
       sctx.globalAlpha = 0.65 * strokeFade;
       sctx.lineWidth = Math.max(1, st.curW * 0.72);
       sctx.beginPath();
@@ -494,7 +618,7 @@ function stampSegment(p0, p1, vel) {
       sctx.globalAlpha = 1;
       strokePending = true;
     }
-    const spacing = Math.max(1.2, st.curW * (state.brush.type === 'fine' ? 0.16 : 0.22));
+    const spacing = Math.max(1.2, st.curW * (brush.type === 'fine' ? 0.16 : 0.22) * brush.spacingMul);
     const steps = Math.max(1, Math.ceil(d / spacing));
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
@@ -527,7 +651,7 @@ function stampQuadratic(a, c, b, vel) {
 function finishStroke() {
   const st = state.stroke;
   if (!st || state.washing || !state.last) return;
-  if (state.brush.type === 'broad') return;       // 斗笔抬笔留钝头
+  if (brushProfile().type === 'broad') return;
   const cw = st.curW || strokeWidth(state.vel);
   if (cw < 2.5) return;
   // 缓慢提笔几乎无尾，快速甩笔才略带出锋
@@ -555,7 +679,8 @@ function finishStroke() {
    浓墨重洗近似橡皮，清墨轻抚只晕不褪。 */
 
 function washRadius() {
-  const { brush, wet } = state;
+  const { wet } = state;
+  const brush = brushProfile();
   return clamp(brush.size * (0.8 + wet.spread * 0.7) * 0.62, 8, WASH_MAX);
 }
 
@@ -660,103 +785,212 @@ function washSegment(p0, p1) {
   dirty = true;
 }
 
-/* ───────────── 题款钤印 ───────────── */
+/* ───────────── 题款 · 钤印 ───────────── */
 
 const INS_FONT = "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif";
+
+const SEAL_FONTS = [
+  { id: 'brush', name: '篆意', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif" },
+  { id: 'kai',   name: '楷体', family: "'Kaiti SC','STKaiti','KaiTi',serif" },
+  { id: 'song',  name: '宋体', family: "'Noto Serif SC','Songti SC','STSong',serif" },
+  { id: 'bold',  name: '方劲', family: "'Noto Serif SC','Songti SC','STSong',serif", weight: '600' },
+];
+
 const sealC = document.createElement('canvas');
 sealC.width = sealC.height = 120;
 
-// 预渲染印章：朱文方印、白文镂空、边缘斑驳磨损
-function renderSeal(txt) {
-  const c = sealC.getContext('2d');
-  c.clearRect(0, 0, 120, 120);
-  const s = 46, cx = 60, cy = 60;
+const sealDraft = { carve: 'yin', fontId: 'brush' };
 
-  c.fillStyle = '#a13524';
-  c.beginPath();
-  c.roundRect(cx - s / 2, cy - s / 2, s, s, 3);
-  c.fill();
+function sealFontStr(fontId, fs) {
+  const f = SEAL_FONTS.find(x => x.id === fontId) || SEAL_FONTS[0];
+  const w = f.weight ? `${f.weight} ` : '';
+  return `${w}${fs}px ${f.family}`;
+}
 
-  // 印文（白文：镂空见纸）
-  c.globalCompositeOperation = 'destination-out';
-  c.textAlign = 'center';
-  c.textBaseline = 'middle';
-  const chars = txt.slice(0, 4).split('');
+function sealLayout(chars, s, cx, cy) {
   let fs, pos;
   if (chars.length === 1) {
     fs = s * 0.62; pos = [[cx, cy + 1]];
   } else if (chars.length === 2) {
     fs = s * 0.42; pos = [[cx, cy - s * 0.21], [cx, cy + s * 0.25]];
   } else {
-    // 传统印章自右起竖读：右上、右下、左上、左下
     fs = s * 0.36;
     pos = [[cx + s * 0.22, cy - s * 0.21], [cx + s * 0.22, cy + s * 0.25],
            [cx - s * 0.22, cy - s * 0.21], [cx - s * 0.22, cy + s * 0.25]];
   }
-  c.font = `${fs}px ${INS_FONT}`;
-  chars.forEach((ch, i) => { if (pos[i]) c.fillText(ch, pos[i][0], pos[i][1]); });
-
-  // 印泥斑驳：边缘居多，内部少许
-  for (let i = 0; i < 80; i++) {
-    let px, py;
-    if (Math.random() < 0.75) {
-      const t = rand(1), side = (Math.random() * 4) | 0;
-      if (side < 2) { px = cx - s / 2 + t * s; py = (side === 0 ? cy - s / 2 : cy + s / 2) + gauss() * 1.8; }
-      else { px = (side === 2 ? cx - s / 2 : cx + s / 2) + gauss() * 1.8; py = cy - s / 2 + t * s; }
-    } else {
-      px = cx + gauss() * s * 0.45; py = cy + gauss() * s * 0.45;
-    }
-    c.beginPath();
-    c.arc(px, py, rand(0.4, 1.7), 0, TAU);
-    c.fill();
-  }
-  c.globalCompositeOperation = 'source-over';
+  return { fs, pos };
 }
 
-// 在画面 (x, y) 处落款：竖排题词自右而左，印章钤于首列之下
+// 生成略变形方印轮廓（每钤一次形状不同）
+function buildSealContour(cx, cy, s) {
+  const h = s / 2;
+  const corners = [{ x: -h, y: -h }, { x: h, y: -h }, { x: h, y: h }, { x: -h, y: h }];
+  const pts = [];
+  for (let i = 0; i < 4; i++) {
+    const c0 = corners[i], c1 = corners[(i + 1) % 4];
+    pts.push({
+      x: cx + c0.x + gauss() * 2.8,
+      y: cy + c0.y + gauss() * 2.8,
+    });
+    for (let k = 1; k <= 2; k++) {
+      const t = k / 3;
+      pts.push({
+        x: cx + lerp(c0.x, c1.x, t) + gauss() * 2.2,
+        y: cy + lerp(c0.y, c1.y, t) + gauss() * 1.8,
+      });
+    }
+  }
+  return pts;
+}
+
+function sealContourPath(c, pts) {
+  c.beginPath();
+  c.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+  c.closePath();
+}
+
+// 边缘断纹、崩缺
+function applySealEdgeBreaks(c, pts) {
+  const n = pts.length;
+  c.save();
+  c.globalCompositeOperation = 'destination-out';
+  c.fillStyle = '#000';
+  c.lineCap = 'butt';
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % n];
+    const a = Math.atan2(q.y - p.y, q.x - p.x);
+    if (Math.random() < 0.42) {
+      c.lineWidth = rand(1.4, 4.2);
+      c.beginPath();
+      c.moveTo(p.x + gauss() * 1.2, p.y + gauss() * 1.2);
+      c.lineTo(p.x + Math.cos(a + gauss() * 0.35) * rand(3, 9),
+        p.y + Math.sin(a + gauss() * 0.35) * rand(3, 9));
+      c.stroke();
+    }
+    if (Math.random() < 0.28) {
+      c.beginPath();
+      c.arc(p.x + gauss() * 2, p.y + gauss() * 2, rand(1, 3.8), 0, TAU);
+      c.fill();
+    }
+  }
+  for (let i = 0; i < 5; i++) {
+    const p = pts[(Math.random() * n) | 0];
+    c.beginPath();
+    c.arc(p.x, p.y, rand(2.5, 5.5), 0, TAU);
+    c.fill();
+  }
+  c.restore();
+}
+
+function applySealWear(c, pts, carve) {
+  const n = pts.length;
+  if (carve === 'yang') c.fillStyle = '#a13524';
+  for (let i = 0; i < (carve === 'yin' ? 72 : 40); i++) {
+    const p = pts[(Math.random() * n) | 0];
+    const px = p.x + gauss() * 2.8;
+    const py = p.y + gauss() * 2.8;
+    c.globalAlpha = carve === 'yin' ? 1 : rand(0.12, 0.4);
+    c.beginPath();
+    c.arc(px, py, rand(0.35, 2.2), 0, TAU);
+    c.fill();
+  }
+  c.globalAlpha = 1;
+}
+
+function renderSeal(txt, opts = {}) {
+  const carve = opts.carve || 'yin';
+  const fontId = opts.fontId || 'brush';
+  const c = sealC.getContext('2d');
+  c.clearRect(0, 0, 120, 120);
+  const s = 46, cx = 60, cy = 60;
+  const contour = buildSealContour(cx, cy, s);
+  const chars = txt.slice(0, 4).split('');
+  const { fs, pos } = sealLayout(chars, s, cx, cy);
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = sealFontStr(fontId, fs);
+
+  if (carve === 'yin') {
+    c.fillStyle = '#a13524';
+    sealContourPath(c, contour);
+    c.fill();
+    c.globalCompositeOperation = 'destination-out';
+    chars.forEach((ch, i) => { if (pos[i]) c.fillText(ch, pos[i][0], pos[i][1]); });
+    applySealEdgeBreaks(c, contour);
+    applySealWear(c, contour, 'yin');
+    c.globalCompositeOperation = 'source-over';
+  } else {
+    c.fillStyle = '#a13524';
+    chars.forEach((ch, i) => { if (pos[i]) c.fillText(ch, pos[i][0], pos[i][1]); });
+    c.strokeStyle = 'rgba(161,53,36,0.55)';
+    c.lineWidth = rand(1.3, 2.1);
+    sealContourPath(c, contour);
+    c.stroke();
+    c.globalCompositeOperation = 'destination-out';
+    applySealEdgeBreaks(c, contour);
+    applySealWear(c, contour, 'yang');
+    c.globalCompositeOperation = 'source-over';
+  }
+}
+
+function updateSealPreview() {
+  const txt = $('#seal-text').value.trim() || '墨韵';
+  renderSeal(txt, sealDraft);
+  const prev = $('#seal-preview');
+  if (!prev) return;
+  const pctx = prev.getContext('2d');
+  pctx.clearRect(0, 0, 96, 96);
+  pctx.fillStyle = '#f4eedd';
+  pctx.fillRect(0, 0, 96, 96);
+  pctx.drawImage(sealC, 0, 0, 120, 120, 8, 8, 80, 80);
+}
+
 function placeInscription(p) {
-  const { text, seal } = state.placing;
+  const { text } = state.placing;
   state.placing = null;
   view.style.cursor = 'none';
   pushUndo();
 
   const fs = 30, lh = fs * 1.14, colGap = fs * 1.35;
-  let sealY = p.y;
-
-  if (text) {
-    const cols = text.split(/[\s/]+/).filter(Boolean);
-    ink.font = `${fs}px ${INS_FONT}`;
-    ink.textAlign = 'center';
-    ink.textBaseline = 'middle';
-    ink.fillStyle = '#26231f';
-    let cx = p.x;
-    for (const col of cols) {
-      let cy = p.y + fs / 2;
-      for (const ch of col) {
-        ink.globalAlpha = rand(0.76, 0.9);          // 笔墨浓淡微变
-        ink.fillText(ch, cx + gauss() * 0.9, cy + gauss() * 0.9);
-        cy += lh;
-      }
-      cx -= colGap;
+  const cols = text.split(/[\s/]+/).filter(Boolean);
+  ink.font = `${fs}px ${INS_FONT}`;
+  ink.textAlign = 'center';
+  ink.textBaseline = 'middle';
+  ink.fillStyle = '#26231f';
+  let cx = p.x;
+  for (const col of cols) {
+    let cy = p.y + fs / 2;
+    for (const ch of col) {
+      ink.globalAlpha = rand(0.76, 0.9);
+      ink.fillText(ch, cx + gauss() * 0.9, cy + gauss() * 0.9);
+      cy += lh;
     }
-    ink.globalAlpha = 1;
-    sealY = p.y + cols[0].length * lh + 10;
+    cx -= colGap;
   }
-
-  if (seal) {
-    renderSeal(seal);
-    ink.save();
-    ink.translate(p.x, sealY + 24);
-    ink.rotate(gauss() * 0.04);                     // 钤印微斜
-    ink.globalAlpha = 0.95;
-    ink.drawImage(sealC, -60, -60);
-    ink.restore();
-    ink.globalAlpha = 1;
-  }
-
+  ink.globalAlpha = 1;
   state.unsaved = true;
   dirty = true;
-  toast('落款已成');
+  toast('题款已成');
+}
+
+function placeSeal(p) {
+  const { text, carve, fontId } = state.placing;
+  state.placing = null;
+  view.style.cursor = 'none';
+  pushUndo();
+  renderSeal(text, { carve, fontId });
+  ink.save();
+  ink.translate(p.x, p.y);
+  ink.rotate(gauss() * 0.04);
+  ink.globalAlpha = 0.95;
+  ink.drawImage(sealC, -60, -60);
+  ink.restore();
+  ink.globalAlpha = 1;
+  state.unsaved = true;
+  dirty = true;
+  toast('钤印已成');
 }
 
 function openInscribe() {
@@ -768,15 +1002,33 @@ function closeInscribe() {
   $('#inscribe-modal').classList.add('hidden');
 }
 
+function openSeal() {
+  $('#seal-modal').classList.remove('hidden');
+  $('#seal-text').focus();
+  updateSealPreview();
+}
+
+function closeSeal() {
+  $('#seal-modal').classList.add('hidden');
+}
+
 $('#ins-cancel').onclick = closeInscribe;
 $('#ins-ok').onclick = () => {
   const text = $('#ins-text').value.trim();
-  const seal = $('#ins-seal').value.trim() || '墨韵';
-  if (!text && !seal) { toast('请题一两句，或留印文'); return; }
-  state.placing = { text, seal };
+  if (!text) { toast('请题一两句'); return; }
   closeInscribe();
-  toast('点选画面落款处');
+  state.placing = { mode: 'inscribe', text };
   view.style.cursor = 'crosshair';
+  toast('点选画面题款处');
+};
+
+$('#seal-cancel').onclick = closeSeal;
+$('#seal-ok').onclick = () => {
+  const text = $('#seal-text').value.trim() || '墨韵';
+  closeSeal();
+  state.placing = { mode: 'seal', text, carve: sealDraft.carve, fontId: sealDraft.fontId };
+  view.style.cursor = 'crosshair';
+  toast('点选画面钤印处');
 };
 
 $('#inscribe-modal').addEventListener('keydown', e => {
@@ -784,12 +1036,38 @@ $('#inscribe-modal').addEventListener('keydown', e => {
   if (e.key === 'Escape') closeInscribe();
 });
 
+$('#seal-modal').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('#seal-ok').click();
+  if (e.key === 'Escape') closeSeal();
+});
+
+$('#seal-text').addEventListener('input', updateSealPreview);
+
+for (const btn of $('#seal-carve-chips').querySelectorAll('.chip')) {
+  btn.onclick = () => {
+    sealDraft.carve = btn.dataset.carve;
+    for (const b of $('#seal-carve-chips').querySelectorAll('.chip'))
+      b.classList.toggle('sel', b === btn);
+    updateSealPreview();
+  };
+}
+
+for (const btn of $('#seal-font-chips').querySelectorAll('.chip')) {
+  btn.onclick = () => {
+    sealDraft.fontId = btn.dataset.font;
+    for (const b of $('#seal-font-chips').querySelectorAll('.chip'))
+      b.classList.toggle('sel', b === btn);
+    updateSealPreview();
+  };
+}
+
 /* ───────────── 撤销 ───────────── */
 
+const UNDO_MAX = 24;
 const undoStack = [];
 
 function pushUndo() {
-  if (undoStack.length >= 6) undoStack.shift();
+  if (undoStack.length >= UNDO_MAX) undoStack.shift();
   undoStack.push({
     img: ink.getImageData(0, 0, CANVAS_W, CANVAS_H),
     water: water.slice(), pr: pigR.slice(), pg: pigG.slice(), pb: pigB.slice(),
@@ -818,7 +1096,12 @@ function getPos(e) {
 view.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   e.preventDefault();
-  if (state.placing) { placeInscription(getPos(e)); return; }
+  if (state.placing) {
+    const p = getPos(e);
+    if (state.placing.mode === 'seal') placeSeal(p);
+    else placeInscription(p);
+    return;
+  }
   pushUndo();
   state.painting = true;
   state.unsaved = true;
@@ -843,8 +1126,8 @@ window.addEventListener('pointermove', e => {
   // 笔随手走而略滞后：指数平滑抹掉鼠标抖动，线条更连贯圆润
   if (!state.washing) {
     p = {
-      x: lerp(state.last.x, p.x, state.brush.type === 'fine' ? 0.55 : 0.7),
-      y: lerp(state.last.y, p.y, state.brush.type === 'fine' ? 0.55 : 0.7),
+      x: lerp(state.last.x, p.x, brushProfile().type === 'fine' ? 0.55 : 0.7),
+      y: lerp(state.last.y, p.y, brushProfile().type === 'fine' ? 0.55 : 0.7),
     };
   }
   const now = performance.now();
@@ -882,7 +1165,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && state.placing) {
     state.placing = null;
     view.style.cursor = 'none';
-    toast('已取消落款');
+    toast('已取消');
   }
 });
 
@@ -933,6 +1216,8 @@ function loop() {
 /* ───────────── 工具栏 ───────────── */
 
 const toolbar = $('#toolbar');
+const toolsLeft = $('#tools-left');
+const toolsRight = $('#tools-right');
 
 function el(tag, cls, html) {
   const d = document.createElement(tag);
@@ -942,74 +1227,16 @@ function el(tag, cls, html) {
 }
 
 function buildToolbar() {
+  buildActionBar();
+  buildCanvasToolsLeft();
+  buildCanvasToolsRight();
+  refreshSel();
+}
+
+function buildActionBar() {
   toolbar.innerHTML = '';
-
-  // 笔
-  const gBrush = el('div', 'tool-group');
-  gBrush.append(el('div', 'g-label', '笔'));
-  for (const b of BRUSHES) {
-    const it = el('div', 'brush-item',
-      `<span class="b-name">${b.name}</span><span class="b-sub">${b.sub}</span>`);
-    it.dataset.id = b.id;
-    it.onclick = () => { state.brush = b; refreshSel(); };   // 水洗模式下也调节水笔大小
-    gBrush.append(it);
-  }
-  toolbar.append(gBrush);
-
-  // 墨（干湿度）
-  const gWet = el('div', 'tool-group');
-  gWet.append(el('div', 'g-label', '墨'));
-  const wetRow = el('div', 'dot-row');
-  for (const w of WETNESS) {
-    const it = el('div', 'ink-dot', `<span class="dot-name">${w.name}</span>`);
-    it.dataset.id = w.id;
-    it.style.background = `rgba(31,29,26,${w.alpha})`;
-    it.onclick = () => { state.wet = w; refreshSel(); };
-    wetRow.append(it);
-  }
-  gWet.append(wetRow);
-  toolbar.append(gWet);
-
-  // 色
-  const gColor = el('div', 'tool-group');
-  gColor.append(el('div', 'g-label', '色'));
-  const colRow = el('div', 'dot-row');
-  for (const c of COLORS) {
-    const it = el('div', 'color-dot', `<span class="dot-name">${c.name}</span>`);
-    it.dataset.id = c.id;
-    it.style.background = c.hex;
-    it.onclick = () => { state.color = c; state.washing = false; refreshSel(); };
-    colRow.append(it);
-  }
-  gColor.append(colRow);
-  toolbar.append(gColor);
-
-  // 水
-  const gWater = el('div', 'tool-group');
-  gWater.append(el('div', 'g-label', '水'));
-  const wIt = el('div', 'water-item', '清水笔');
-  wIt.onclick = () => { state.washing = !state.washing; refreshSel(); };
-  gWater.append(wIt);
-  toolbar.append(gWater);
-
-  // 纸
-  const gPaper = el('div', 'tool-group');
-  gPaper.append(el('div', 'g-label', '纸'));
-  const pRow = el('div', 'paper-row');
-  for (const p of PAPERS) {
-    const it = el('div', 'paper-item', `<span class="dot-name">${p.name}</span>`);
-    it.dataset.id = p.id;
-    it.style.background = p.tint;
-    it.onclick = () => { state.paper = p; paintPaper(); refreshSel(); };
-    pRow.append(it);
-  }
-  gPaper.append(pRow);
-  toolbar.append(gPaper);
-
-  // 操作
   const gAct = el('div', 'tool-group action-group');
   const acts = [
-    ['题款', openInscribe],
     ['撤笔', undo],
     ['涤纸', clearPaper],
     null,
@@ -1025,21 +1252,114 @@ function buildToolbar() {
     gAct.append(btn);
   }
   toolbar.append(gAct);
+}
 
-  refreshSel();
+function buildCanvasToolsLeft() {
+  toolsLeft.innerHTML = '';
+
+  const gBrush = el('div', 'tool-group');
+  gBrush.append(el('div', 'g-label', '笔'));
+  for (const b of BRUSHES) {
+    const it = el('div', 'brush-item',
+      `<span class="b-name">${b.name}</span><span class="b-sub">${b.sub}</span>`);
+    it.dataset.kind = 'brush';
+    it.dataset.id = b.id;
+    it.onclick = () => { state.brush = b; refreshSel(); };
+    gBrush.append(it);
+  }
+  toolsLeft.append(gBrush);
+
+  const gSize = el('div', 'tool-group');
+  gSize.append(el('div', 'g-label', '毫'));
+  for (const t of SIZE_TIERS) {
+    const it = el('div', 'brush-item',
+      `<span class="b-name">${t.name}</span><span class="b-sub">${t.sub}</span>`);
+    it.dataset.kind = 'size';
+    it.dataset.id = t.id;
+    it.onclick = () => { state.sizeByBrush[state.brush.id] = t.id; refreshSel(); };
+    gSize.append(it);
+  }
+  toolsLeft.append(gSize);
+
+  const gWet = el('div', 'tool-group');
+  gWet.append(el('div', 'g-label', '墨'));
+  const wetRow = el('div', 'dot-row');
+  for (const w of WETNESS) {
+    const it = el('div', 'ink-dot', `<span class="dot-name">${w.name}</span>`);
+    it.dataset.id = w.id;
+    it.style.background = `rgba(31,29,26,${w.alpha})`;
+    it.onclick = () => { state.wet = w; refreshSel(); };
+    wetRow.append(it);
+  }
+  gWet.append(wetRow);
+  toolsLeft.append(gWet);
+
+  const gColor = el('div', 'tool-group');
+  gColor.append(el('div', 'g-label', '色'));
+  const colRow = el('div', 'dot-row');
+  for (const c of COLORS) {
+    const it = el('div', 'color-dot', `<span class="dot-name">${c.name}</span>`);
+    it.dataset.id = c.id;
+    it.style.background = c.hex;
+    it.onclick = () => { state.color = c; state.washing = false; refreshSel(); };
+    colRow.append(it);
+  }
+  gColor.append(colRow);
+  toolsLeft.append(gColor);
+}
+
+function buildCanvasToolsRight() {
+  toolsRight.innerHTML = '';
+
+  const gPaper = el('div', 'tool-group');
+  gPaper.append(el('div', 'g-label', '纸'));
+  for (const p of PAPERS) {
+    const it = el('div', 'brush-item',
+      `<span class="b-name">${p.name}</span>`);
+    it.dataset.id = p.id;
+    it.onclick = () => { state.paper = p; paintPaper(); refreshSel(); };
+    gPaper.append(it);
+  }
+  toolsRight.append(gPaper);
+
+  const gWater = el('div', 'tool-group');
+  gWater.append(el('div', 'g-label', '水'));
+  const wIt = el('div', 'brush-item',
+    `<span class="b-name">清水</span><span class="b-sub">笔</span>`);
+  wIt.dataset.id = 'wash';
+  wIt.onclick = () => { state.washing = !state.washing; refreshSel(); };
+  gWater.append(wIt);
+  toolsRight.append(gWater);
+
+  const gMark = el('div', 'tool-group');
+  gMark.append(el('div', 'g-label', '款'));
+  const insIt = el('div', 'brush-item',
+    `<span class="b-name">题款</span><span class="b-sub">题词</span>`);
+  insIt.dataset.id = 'inscribe';
+  insIt.onclick = () => { state.washing = false; refreshSel(); openInscribe(); };
+  gMark.append(insIt);
+  const sealIt = el('div', 'brush-item',
+    `<span class="b-name">钤印</span><span class="b-sub">印章</span>`);
+  sealIt.dataset.id = 'seal';
+  sealIt.onclick = () => { state.washing = false; refreshSel(); openSeal(); };
+  gMark.append(sealIt);
+  toolsRight.append(gMark);
 }
 
 function refreshSel() {
-  for (const it of toolbar.querySelectorAll('.brush-item'))
+  const tierId = state.sizeByBrush[state.brush.id] || 'bao';
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="brush"]'))
     it.classList.toggle('sel', it.dataset.id === state.brush.id);
-  for (const it of toolbar.querySelectorAll('.ink-dot'))
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="size"]'))
+    it.classList.toggle('sel', it.dataset.id === tierId);
+  for (const it of toolsLeft.querySelectorAll('.ink-dot'))
     it.classList.toggle('sel', it.dataset.id === state.wet.id);
-  for (const it of toolbar.querySelectorAll('.color-dot'))
+  for (const it of toolsLeft.querySelectorAll('.color-dot'))
     it.classList.toggle('sel', !state.washing && it.dataset.id === state.color.id);
-  for (const it of toolbar.querySelectorAll('.paper-item'))
-    it.classList.toggle('sel', it.dataset.id === state.paper.id);
-  const w = toolbar.querySelector('.water-item');
-  if (w) w.classList.toggle('sel', state.washing);
+  for (const it of toolsRight.querySelectorAll('.brush-item')) {
+    if (it.dataset.id === 'wash') it.classList.toggle('sel', state.washing);
+    else it.classList.toggle('sel', it.dataset.id === state.paper.id);
+  }
 }
 
 function clearPaper() {
