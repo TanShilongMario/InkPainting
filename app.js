@@ -9,6 +9,7 @@ const rand = (a = 1, b) => b === undefined ? Math.random() * a : a + Math.random
 // 近似高斯分布，范围 -1..1，中心密集 —— 模拟笔毫聚锋
 const gauss = () => (Math.random() + Math.random() + Math.random()) / 1.5 - 1;
 const lerp = (a, b, t) => a + (b - a) * t;
+const IS_COARSE = matchMedia('(pointer: coarse)').matches;   // 触屏设备
 
 const CANVAS_W = 1000, CANVAS_H = 1390;
 
@@ -255,10 +256,14 @@ const GH = Math.ceil(CANVAS_H / GRID_F);           // 348
 const CELLS = GW * GH;
 
 const water = new Float32Array(CELLS);             // 水量
-const pigR = new Float32Array(CELLS);              // 颜料吸光密度（R/G/B 通道）
+const pigR = new Float32Array(CELLS);              // 游离颜料（随水流动）
 const pigG = new Float32Array(CELLS);
 const pigB = new Float32Array(CELLS);
+const fixR = new Float32Array(CELLS);              // 固着颜料（已干入纸，不再流动）
+const fixG = new Float32Array(CELLS);
+const fixB = new Float32Array(CELLS);
 const perm = new Float32Array(CELLS);              // 纸纤维渗透率
+const inkAge = new Float32Array(CELLS);            // 墨层最近落墨时刻（秒），水洗随墨龄衰减
 
 const fluidC = document.createElement('canvas');   // 网格渲染小图，放大合成时自带柔化
 fluidC.width = GW; fluidC.height = GH;
@@ -267,6 +272,7 @@ const fimg = fctx.createImageData(GW, GH);
 
 let fluidDirty = true;
 let fluidFlip = false;
+let fluidIdle = false;     // 纸面无水时跳过渗流扫描，省电省热
 
 // 生成纤维渗透率场：双尺度纹理 + 细随机 + 致密阻滞点（共同产生指状洇散边缘）
 function noiseLayer(cw, ch) {
@@ -298,7 +304,31 @@ function genPerm() {
 
 function resetFluid() {
   water.fill(0); pigR.fill(0); pigG.fill(0); pigB.fill(0);
+  fixR.fill(0); fixG.fill(0); fixB.fill(0);
+  inkAge.fill(0);
   fluidDirty = true;
+  fluidIdle = false;
+}
+
+// 墨龄 → 新鲜度：刚落的墨易被水打散，干透的墨咬纸难洗
+function inkFreshness(x, y) {
+  const cx = clamp((x / GRID_F) | 0, 1, GW - 2);
+  const cy = clamp((y / GRID_F) | 0, 1, GH - 2);
+  let t = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const v = inkAge[(cy + dy) * GW + cx + dx];
+      if (v > t) t = v;
+    }
+  }
+  if (!t) return 0;
+  return clamp(1 - (performance.now() / 1000 - t) / 10, 0, 1);   // 约 10 秒干透
+}
+
+function markInkAge(x, y) {
+  const cx = (x / GRID_F) | 0, cy = (y / GRID_F) | 0;
+  if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return;
+  inkAge[cy * GW + cx] = performance.now() / 1000;
 }
 
 // 落墨入纸：在网格中注入水与颜料
@@ -311,8 +341,11 @@ function deposit(x, y, r, strength) {
   const y0 = Math.max(1, Math.floor(gy - gr)), y1 = Math.min(GH - 2, Math.ceil(gy + gr));
   const wAmt = wet.bleed * 0.6 * strength;
   const chromatic = color.id !== 'xuanmo';
-  const dAmt = Math.pow(wet.alpha, chromatic ? 0.68 : 0.82) * 0.22 * strength;
   const coeff = pigmentCoeffs(color, wet, state.paper.tint);
+  // 该墨级的目标浓度：颜料只向它渐近靠拢、永不超出——
+  // 反复涂抹不会越积越黑，浅墨恒浅，而注水照旧、流动感不减
+  const dTarget = Math.pow(wet.alpha, chromatic ? 0.68 : 0.82) * 1.15 * Math.min(1, strength);
+  const tR = dTarget * coeff.kR, tG = dTarget * coeff.kG, tB = dTarget * coeff.kB;
 
   for (let cy = y0; cy <= y1; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
@@ -322,17 +355,19 @@ function deposit(x, y, r, strength) {
       const i = cy * GW + cx;
       const fall = 1 - dist;
       water[i] = Math.min(2.5, water[i] + wAmt * fall * perm[i]);
-      const fp = fall * (0.35 + 0.65 * Math.min(1, perm[i]));
-      pigR[i] += dAmt * fp * coeff.kR;
-      pigG[i] += dAmt * fp * coeff.kG;
-      pigB[i] += dAmt * fp * coeff.kB;
+      const rate = 0.16 * fall * (0.35 + 0.65 * Math.min(1, perm[i]));
+      if (pigR[i] < tR) pigR[i] += (tR - pigR[i]) * rate;
+      if (pigG[i] < tG) pigG[i] += (tG - pigG[i]) * rate;
+      if (pigB[i] < tB) pigB[i] += (tB - pigB[i]) * rate;
     }
   }
   fluidDirty = true;
+  fluidIdle = false;
 }
 
 // 每帧渗流：水往低处与纤维疏松处走，颜料随水迁移（略滞后，干后边缘留痕）
 function fluidStep() {
+  if (fluidIdle) return;
   fluidFlip = !fluidFlip;
   let any = false;
 
@@ -364,20 +399,26 @@ function fluidStep() {
         }
         n = k === 0 ? i + 1 : k === 1 ? i + GW : i - 1;
       }
-      // 蒸发与吸纸
-      water[i] = Math.max(0, w * 0.995 - 0.0002);
+      // 颜料固着：水将尽时迅速咬纸，水足时缓慢沉淀——干透后便不再流动
+      const fr = w < 0.08 ? 0.025 : 0.002;
+      if (pigR[i] > 0) { const m = pigR[i] * fr; pigR[i] -= m; fixR[i] += m; }
+      if (pigG[i] > 0) { const m = pigG[i] * fr; pigG[i] -= m; fixG[i] += m; }
+      if (pigB[i] > 0) { const m = pigB[i] * fr; pigB[i] -= m; fixB[i] += m; }
+      // 蒸发与吸纸（放缓，墨保湿更久、徐徐而干）
+      water[i] = Math.max(0, w * 0.9975 - 0.0001);
     }
   }
   if (any) { fluidDirty = true; dirty = true; }
+  else fluidIdle = true;
 }
 
 // 吸光密度 → 透射率（Beer-Lambert），乘法合成即真实减色混色
 function renderFluid() {
   const d = fimg.data;
   for (let i = 0, j = 0; i < CELLS; i++, j += 4) {
-    d[j] = 255 * Math.exp(-pigR[i]);
-    d[j + 1] = 255 * Math.exp(-pigG[i]);
-    d[j + 2] = 255 * Math.exp(-pigB[i]);
+    d[j] = 255 * Math.exp(-(pigR[i] + fixR[i]));
+    d[j + 1] = 255 * Math.exp(-(pigG[i] + fixG[i]));
+    d[j + 2] = 255 * Math.exp(-(pigB[i] + fixB[i]));
     d[j + 3] = 255;
   }
   fctx.putImageData(fimg, 0, 0);
@@ -510,6 +551,7 @@ function stamp(x, y, r, vel, ang = 0) {
     sctx.globalAlpha = 1;
   }
   strokePending = true;
+  markInkAge(x, y);
 
   // 湿墨入纸：注入流体网格，由渗流形成不规则洇散
   // 细笔注水大减——线条须凝练干净，只余隐约洇意
@@ -585,6 +627,7 @@ function drawBristles(p0, p1, w) {
   }
   sctx.globalAlpha = 1;
   strokePending = true;
+  markInkAge(p1.x, p1.y);
 
   if (wet.bleed > 0) {
     const { depositMul } = brushProfile();
@@ -684,8 +727,9 @@ function washRadius() {
   return clamp(brush.size * (0.8 + wet.spread * 0.7) * 0.62, 8, WASH_MAX);
 }
 
-// 再润湿：把局部已干的笔墨溶入流体网格，随水流动混合
-function rewet(x, y, R, s) {
+// 再润湿：把局部笔墨溶入流体网格，随水流动混合
+// effect 由墨龄决定：新墨易散，干透的墨咬纸难洗
+function rewet(x, y, R, s, effect) {
   const bx = Math.max(0, Math.floor(x - R)), by = Math.max(0, Math.floor(y - R));
   const bw = Math.min(CANVAS_W - bx, Math.ceil(R * 2)), bh = Math.min(CANVAS_H - by, Math.ceil(R * 2));
   if (bw <= 0 || bh <= 0) return;
@@ -694,6 +738,7 @@ function rewet(x, y, R, s) {
   const x0 = Math.max(1, Math.floor((x - R) / GRID_F)), x1 = Math.min(GW - 2, Math.ceil((x + R) / GRID_F));
   const y0 = Math.max(1, Math.floor((y - R) / GRID_F)), y1 = Math.min(GH - 2, Math.ceil((y + R) / GRID_F));
   const wAmt = 0.45 + state.wet.bleed * 0.65;      // 越湿注水越多，晕得越远
+  const remob = 0.05 * effect;                     // 固着颜料仅少量被水重新松动
 
   for (let cy = y0; cy <= y1; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
@@ -702,25 +747,31 @@ function rewet(x, y, R, s) {
       if (ddx * ddx + ddy * ddy > R * R) continue;
       const i = cy * GW + cx;
       water[i] = Math.min(2.5, water[i] + wAmt * perm[i]);
+      if (fixR[i] > 0) { const m = fixR[i] * remob; fixR[i] -= m; pigR[i] += m; }
+      if (fixG[i] > 0) { const m = fixG[i] * remob; fixG[i] -= m; pigG[i] += m; }
+      if (fixB[i] > 0) { const m = fixB[i] * remob; fixB[i] -= m; pigB[i] += m; }
       // 拾取少量墨色入水（提墨量须大于回写量，水洗才会变淡）
       const ix = px - bx, iy = py - by;
       if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) continue;
       const j = (iy * bw + ix) * 4;
       const a = im[j + 3] / 255;
       if (a < 0.04) continue;
-      const pick = a * 0.05 * (0.4 + s);
+      const pick = a * 0.05 * (0.4 + s) * effect;
       pigR[i] += pick * ((1 - im[j] / 255) * 1.7 + 0.05);
       pigG[i] += pick * ((1 - im[j + 1] / 255) * 1.7 + 0.05);
       pigB[i] += pick * ((1 - im[j + 2] / 255) * 1.7 + 0.05);
     }
   }
   fluidDirty = true;
+  fluidIdle = false;
 }
 
 function washAt(x, y, mx, my) {
   const R = washRadius();
   const S = Math.ceil((R + WASH_PAD) * 2);
   const s = state.wet.alpha;                       // 墨的轻重 → 水洗力度
+  // 干透的墨咬纸：墨龄越老，可被打散的比例越低
+  const effect = 0.22 + 0.78 * inkFreshness(x, y);
   const sx = Math.round(x - S / 2), sy = Math.round(y - S / 2);
 
   // 取局部墨迹做模糊
@@ -755,7 +806,7 @@ function washAt(x, y, mx, my) {
     const ex = x + gauss() * R * 0.4, ey = y + gauss() * R * 0.4;
     const er = R * rand(0.5, 0.95);
     const g = ink.createRadialGradient(ex, ey, 0, ex, ey, er);
-    g.addColorStop(0, `rgba(0,0,0,${rand(0.06, 0.1) * (0.35 + s)})`);
+    g.addColorStop(0, `rgba(0,0,0,${rand(0.06, 0.1) * (0.35 + s) * effect})`);
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ink.fillStyle = g;
     ink.beginPath();
@@ -764,13 +815,13 @@ function washAt(x, y, mx, my) {
   }
   ink.globalCompositeOperation = 'source-over';
 
-  // 再轻回写模糊墨迹：沿运笔方向推移，墨随水走
-  ink.globalAlpha = 0.18 * (0.35 + s);
+  // 再轻回写模糊墨迹：沿运笔方向推移，墨随水走（干墨几乎不随水）
+  ink.globalAlpha = 0.18 * (0.35 + s) * (0.35 + 0.65 * effect);
   ink.drawImage(washTmp, 0, 0, S, S,
     sx + mx * 1.1 + gauss() * 2, sy + my * 1.1 + gauss() * 2, S, S);
   ink.globalAlpha = 1;
 
-  rewet(x, y, R, s);
+  rewet(x, y, R, s, effect);
 }
 
 function washSegment(p0, p1) {
@@ -1063,7 +1114,8 @@ for (const btn of $('#seal-font-chips').querySelectorAll('.chip')) {
 
 /* ───────────── 撤销 ───────────── */
 
-const UNDO_MAX = 24;
+// 触屏设备内存预算紧（iOS Safari 易因 ImageData 过多闪退），快照大减
+const UNDO_MAX = IS_COARSE ? 5 : 24;
 const undoStack = [];
 
 function pushUndo() {
@@ -1071,6 +1123,7 @@ function pushUndo() {
   undoStack.push({
     img: ink.getImageData(0, 0, CANVAS_W, CANVAS_H),
     water: water.slice(), pr: pigR.slice(), pg: pigG.slice(), pb: pigB.slice(),
+    fr: fixR.slice(), fg: fixG.slice(), fb: fixB.slice(), age: inkAge.slice(),
   });
 }
 
@@ -1079,7 +1132,9 @@ function undo() {
   if (!s) { toast('已无可撤之笔'); return; }
   ink.putImageData(s.img, 0, 0);
   water.set(s.water); pigR.set(s.pr); pigG.set(s.pg); pigB.set(s.pb);
+  fixR.set(s.fr); fixG.set(s.fg); fixB.set(s.fb); inkAge.set(s.age);
   fluidDirty = true;
+  fluidIdle = false;
   dirty = true;
 }
 
@@ -1096,6 +1151,7 @@ function getPos(e) {
 view.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   e.preventDefault();
+  try { view.setPointerCapture(e.pointerId); } catch { /* 部分浏览器不支持 */ }
   if (state.placing) {
     const p = getPos(e);
     if (state.placing.mode === 'seal') placeSeal(p);
@@ -1155,6 +1211,11 @@ window.addEventListener('blur', () => {
   if (state.painting) commitStroke();
   state.painting = false;
 });
+// 触屏上系统手势可能中断指针流，务必提交未完成的一笔
+window.addEventListener('pointercancel', () => {
+  if (state.painting) commitStroke();
+  state.painting = false;
+});
 
 window.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' &&
@@ -1174,7 +1235,10 @@ window.addEventListener('keydown', e => {
 const ring = $('#cursor-ring');
 
 function updateCursor(e) {
-  if ($('#view-paint').classList.contains('hidden') || state.placing) { ring.style.display = 'none'; return; }
+  if (e.pointerType === 'touch' || $('#view-paint').classList.contains('hidden') || state.placing) {
+    ring.style.display = 'none';
+    return;
+  }
   const r = view.getBoundingClientRect();
   const over = e.clientX >= r.left && e.clientX <= r.right &&
                e.clientY >= r.top && e.clientY <= r.bottom;
@@ -1288,7 +1352,7 @@ function buildCanvasToolsLeft() {
     const it = el('div', 'ink-dot', `<span class="dot-name">${w.name}</span>`);
     it.dataset.id = w.id;
     it.style.background = `rgba(31,29,26,${w.alpha})`;
-    it.onclick = () => { state.wet = w; refreshSel(); };
+    it.onclick = () => { state.wet = w; refreshSel(); if (IS_COARSE) toast(w.name); };
     wetRow.append(it);
   }
   gWet.append(wetRow);
@@ -1301,7 +1365,7 @@ function buildCanvasToolsLeft() {
     const it = el('div', 'color-dot', `<span class="dot-name">${c.name}</span>`);
     it.dataset.id = c.id;
     it.style.background = c.hex;
-    it.onclick = () => { state.color = c; state.washing = false; refreshSel(); };
+    it.onclick = () => { state.color = c; state.washing = false; refreshSel(); if (IS_COARSE) toast(c.name); };
     colRow.append(it);
   }
   gColor.append(colRow);
@@ -1544,6 +1608,14 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
 }
+
+/* ───────────── 移动端抽屉 ───────────── */
+
+// 两侧文房抽屉 + 底部功能栏，把手随时收展（桌面端把手隐藏，不受影响）
+document.body.classList.add('m-actions-open');
+$('#handle-left').onclick = () => document.body.classList.toggle('m-left-open');
+$('#handle-right').onclick = () => document.body.classList.toggle('m-right-open');
+$('#handle-actions').onclick = () => document.body.classList.toggle('m-actions-open');
 
 /* ───────────── 启动 ───────────── */
 

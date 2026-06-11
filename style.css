@@ -17,7 +17,10 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
 }
+
+body { touch-action: manipulation; }
 
 body {
   background:
@@ -406,6 +409,7 @@ body {
     0 10px 48px rgba(70, 58, 38, 0.18);
   border-radius: 1px;
   cursor: none;
+  touch-action: none;   /* 触屏绘制不触发滚动/缩放 */
 }
 
 /* 题名栏（与左侧功能栏对侧） */
@@ -624,3 +628,196 @@ body {
 }
 
 #toast.show { opacity: 1; }
+
+/* ───────────── 移动端布局（两侧抽屉 + 底部功能栏，均可收起） ───────────── */
+
+.drawer-handle {
+  display: none;
+  position: fixed;
+  z-index: 41;
+  background: rgba(243, 237, 222, 0.95);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-family: var(--brush);
+  font-size: 15px;
+  letter-spacing: 4px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.3s ease, bottom 0.3s ease, color 0.2s;
+}
+
+#handle-left {
+  left: 0; top: 32%;
+  width: 32px; height: 92px;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  writing-mode: vertical-rl;
+}
+
+#handle-right {
+  right: 0; top: 32%;
+  width: 32px; height: 92px;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  writing-mode: vertical-rl;
+}
+
+#handle-actions {
+  left: 50%; bottom: 0;
+  transform: translateX(-50%);
+  width: 100px; height: 28px;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  font-size: 13px;
+}
+
+@media (max-width: 920px) {
+  /* ── 画廊 ── */
+  .gallery-inner {
+    flex-direction: column-reverse;
+    padding: 18px 18px 10px;
+    gap: 18px;
+  }
+
+  .brand {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 0;
+  }
+
+  .brand-title {
+    writing-mode: horizontal-tb;
+    font-size: 34px;
+    letter-spacing: 12px;
+  }
+
+  .brand-seal { width: 30px; height: 30px; font-size: 19px; margin: 0; }
+
+  .gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 26px 16px;
+  }
+
+  .work-del { opacity: 1; width: 30px; height: 30px; font-size: 13px; }
+  .gallery-foot { padding: 12px 0 16px; }
+
+  /* ── 绘制页：画布满幅 ── */
+  #view-paint { display: block; }
+
+  #stage {
+    padding: 10px 0 0;
+    gap: 0;
+    justify-content: center;
+  }
+
+  .canvas-wrap { margin: 0 auto; }
+
+  #paper {
+    height: auto;
+    width: min(96vw, calc((100vh - 140px) / 1.39));
+    cursor: default;
+  }
+
+  #title-aside { display: none; }
+  #cursor-ring { display: none !important; }
+  #toast { bottom: 96px; }
+
+  /* ── 两侧文房抽屉 ── */
+  .canvas-tools {
+    position: fixed;
+    top: 0;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    width: 136px;
+    margin: 0;
+    padding: 22px 8px 26px;
+    max-height: none;
+    background: rgba(243, 237, 222, 0.96);
+    transition: transform 0.3s ease;
+    z-index: 40;
+  }
+
+  #tools-left {
+    left: 0;
+    border-right: 1px solid var(--line);
+    box-shadow: 6px 0 24px rgba(60, 50, 30, 0.12);
+    transform: translateX(-105%);
+  }
+
+  #tools-right {
+    right: 0;
+    border-left: 1px solid var(--line);
+    box-shadow: -6px 0 24px rgba(60, 50, 30, 0.12);
+    transform: translateX(105%);
+  }
+
+  body.m-left-open #tools-left { transform: translateX(0); }
+  body.m-right-open #tools-right { transform: translateX(0); }
+
+  /* ── 底部功能栏 ── */
+  #toolbar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    width: auto;
+    height: calc(58px + env(safe-area-inset-bottom));
+    flex-direction: row;
+    justify-content: center;
+    gap: 0;
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+    background: rgba(243, 237, 222, 0.96);
+    border-top: 1px solid var(--line);
+    transform: translateY(105%);
+    transition: transform 0.3s ease;
+    z-index: 40;
+  }
+
+  body.m-actions-open #toolbar { transform: translateY(0); }
+
+  #toolbar .action-group {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    gap: 2px;
+    width: auto;
+  }
+
+  .action-btn {
+    font-size: 14px;
+    letter-spacing: 3px;
+    padding: 13px 9px;
+    min-width: 44px;
+  }
+
+  .action-sep { width: 1px; height: 22px; margin: 0 4px; }
+
+  /* ── 抽屉把手 ── */
+  .drawer-handle { display: flex; }
+  body.m-left-open #handle-left { transform: translateX(136px); }
+  body.m-right-open #handle-right { transform: translateX(-136px); }
+  body.m-actions-open #handle-actions { bottom: calc(58px + env(safe-area-inset-bottom)); }
+
+  /* ── 触屏目标放大 ── */
+  .ink-dot, .color-dot { width: 27px; height: 27px; }
+  .dot-row { gap: 13px; max-width: 110px; }
+  .brush-item { padding: 9px 10px; }
+  .g-label { font-size: 18px; }
+
+  /* ── 弹窗改为底部 Sheet，避开键盘 ── */
+  .modal { align-items: flex-end; }
+
+  .modal-card, .modal-card-wide {
+    width: 100%;
+    border-radius: 10px 10px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    padding: 24px 24px calc(20px + env(safe-area-inset-bottom));
+  }
+
+  .modal-card input { font-size: 16px; }   /* ≥16px 防 iOS 聚焦自动放大 */
+  .chip { padding: 9px 16px; }
+}
