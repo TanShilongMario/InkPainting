@@ -22,6 +22,14 @@ const BRUSHES = [
   { id: 'pomo',   name: '斗笔', sub: '泼墨', size: 104, varia: 0.5,  type: 'broad'   },
 ];
 
+// 起收锋：起笔与提笔的粗细关系（全局运笔 + 停笔顺线共用）
+const STROKE_TAPERS = [
+  { id: 'out',   name: '收锋', sub: '渐细' },   // 先粗后细
+  { id: 'in',    name: '入锋', sub: '渐粗' },   // 先细后粗
+  { id: 'even',  name: '匀劲', sub: '均衡' },
+  { id: 'belly', name: '鼓腹', sub: '中肥' },   // 两头细、中间粗
+];
+
 const SIZE_TIERS = [
   { id: 'nuo', name: '搦', sub: '细毫' },
   { id: 'bao', name: '饱', sub: '饱毫' },
@@ -95,10 +103,62 @@ const COLORS = [
 ];
 
 const PAPERS = [
-  { id: 'yuban',   name: '玉版宣', tint: '#f4eedd' },
-  { id: 'fanggu',  name: '仿古宣', tint: '#eadfc0' },
-  { id: 'chajian', name: '茶笺',   tint: '#ddcaa9' },
-  { id: 'yuebai',  name: '月白笺', tint: '#e7ebe5' },
+  {
+    id: 'yuban', name: '玉版宣', tint: '#f4eedd',
+    // 细滑皮纸：肌理轻、纤维短，洇散克制
+    tex: {
+      wash: 0.07, cloud: 0, grain: 2200, mottle: 180, pulp: 0, gain: 1.55,
+      fiber: 120, fiberLen: [6, 22], fiberWarm: 0.48,
+      grainDark: 0.58, vignette: 0.048,
+    },
+    fluid: {
+      bleedMul: 0.68, flowMul: 0.72, absorbMul: 0.78,
+      permScale: 0.72, permCoarse: 52, permFine: 138,
+      blockRate: 0.21, depositMul: 0.88,
+    },
+  },
+  {
+    id: 'fanggu', name: '仿古宣', tint: '#eadfc0',
+    // 旧纸黄润：纤维可见，洇散适中
+    tex: {
+      wash: 0.16, cloud: 0, grain: 5000, mottle: 420, pulp: 58, gain: 1.5,
+      fiber: 290, fiberLen: [12, 42], fiberWarm: 0.82,
+      grainDark: 0.74, vignette: 0.1,
+    },
+    fluid: {
+      bleedMul: 1.02, flowMul: 1.05, absorbMul: 1.05,
+      permScale: 1.05, permCoarse: 38, permFine: 96,
+      blockRate: 0.15, depositMul: 1.05,
+    },
+  },
+  {
+    id: 'chajian', name: '茶笺', tint: '#ddcaa9',
+    // 粗松茶纸：絮团、暗点，吸墨强、洇散大
+    tex: {
+      wash: 0.26, cloud: 0, grain: 7600, mottle: 680, pulp: 210, gain: 1.55,
+      fiber: 360, fiberLen: [14, 48], fiberWarm: 0.9,
+      grainDark: 0.8, vignette: 0.12,
+    },
+    fluid: {
+      bleedMul: 1.38, flowMul: 1.28, absorbMul: 1.32,
+      permScale: 1.38, permCoarse: 28, permFine: 72,
+      blockRate: 0.11, depositMul: 1.22,
+    },
+  },
+  {
+    id: 'yuebai', name: '月白笺', tint: '#e7ebe5',
+    // 冷白绢感：云斑轻、纤维少，洇散略柔
+    tex: {
+      wash: 0.1, cloud: 20, grain: 1800, mottle: 160, pulp: 0, gain: 1.48,
+      fiber: 88, fiberLen: [5, 18], fiberWarm: 0.22,
+      grainDark: 0.48, vignette: 0.045,
+    },
+    fluid: {
+      bleedMul: 0.82, flowMul: 0.86, absorbMul: 0.88,
+      permScale: 0.82, permCoarse: 46, permFine: 124,
+      blockRate: 0.17, depositMul: 0.92,
+    },
+  },
 ];
 
 const NAMES = ['浣溪沙', '卜算子', '水调歌头', '临江仙', '念奴娇', '清平乐', '蝶恋花',
@@ -117,6 +177,36 @@ const parseTint = hex => {
   const n = parseInt(hex.slice(1), 16);
   return { r: n >> 16 & 255, g: n >> 8 & 255, b: n & 255 };
 };
+
+function paperSeed(id) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0 || 1;
+}
+
+function makePaperRng(id, salt = 0) {
+  let s = (paperSeed(id) + salt) >>> 0;
+  const next = () => {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+  return {
+    next,
+    range: (a, b) => a + next() * (b - a),
+    chance: p => next() < p,
+  };
+}
+
+function paperTex(p = state.paper) { return p.tex; }
+function paperFluid(p = state.paper) { return p.fluid; }
+
+function tintShade(tint, dr, dg, db, a) {
+  const t = parseTint(tint);
+  return `rgba(${clamp(t.r + dr, 0, 255)},${clamp(t.g + dg, 0, 255)},${clamp(t.b + db, 0, 255)},${a})`;
+}
 
 // 墨级调制颜料：淡墨低饱和、高明度、融纸 —— 非线性设色（非 色×α 线性）
 function pigmentForInk(color, wet, paperTint) {
@@ -182,6 +272,7 @@ const pigmentHex = c => {
 
 const state = {
   brush: BRUSHES[1],
+  strokeTaper: 'belly',
   sizeByBrush: { gongbi: 'bao', xieyi: 'bao', cunca: 'bao', pomo: 'bao' },
   wet: WETNESS[1],
   color: COLORS[0],
@@ -196,6 +287,8 @@ const state = {
   unsaved: false,
   placing: null,
   qMid: null,
+  holdRefine: true,   // 停笔顺线（狼毫 / 羊毫）
+  pointerClient: null,
 };
 
 const view = $('#paper');
@@ -275,9 +368,9 @@ let fluidFlip = false;
 let fluidIdle = false;     // 纸面无水时跳过渗流扫描，省电省热
 
 // 生成纤维渗透率场：双尺度纹理 + 细随机 + 致密阻滞点（共同产生指状洇散边缘）
-function noiseLayer(cw, ch) {
+function noiseLayer(cw, ch, rng) {
   const a = new Float32Array((cw + 1) * (ch + 1));
-  for (let i = 0; i < a.length; i++) a[i] = Math.random();
+  for (let i = 0; i < a.length; i++) a[i] = rng.next();
   return (gx, gy) => {
     const fx = gx / GW * cw, fy = gy / GH * ch;
     const ix = Math.floor(fx), iy = Math.floor(fy);
@@ -289,14 +382,17 @@ function noiseLayer(cw, ch) {
 }
 
 function genPerm() {
-  const n1 = noiseLayer(36, 50);      // 粗纹理
-  const n2 = noiseLayer(100, 139);    // 中尺度，在墨团尺寸上起伏
+  const pf = paperFluid();
+  const rng = makePaperRng(state.paper.id, 91);
+  const chRatio = CANVAS_H / CANVAS_W;
+  const n1 = noiseLayer(pf.permCoarse, Math.max(4, Math.round(pf.permCoarse * chRatio)), rng);
+  const n2 = noiseLayer(pf.permFine, Math.max(8, Math.round(pf.permFine * chRatio)), rng);
   for (let y = 0; y < GH; y++) {
     for (let x = 0; x < GW; x++) {
       const v = n1(x, y) * 0.5 + n2(x, y) * 0.5;
-      let p = (0.06 + v * 0.94) * rand(0.2, 1.8);
-      p = p * p * 1.4;                // 平方拉开对比，强化指状渗流
-      if (Math.random() < 0.16) p *= 0.05;   // 纤维致密处，水难通过
+      let p = (0.06 + v * 0.94) * rng.range(0.2, 1.8);
+      p = p * p * 1.4 * pf.permScale;
+      if (rng.chance(pf.blockRate)) p *= 0.05;
       perm[y * GW + x] = clamp(p, 0.015, 2.4);
     }
   }
@@ -335,15 +431,14 @@ function markInkAge(x, y) {
 function deposit(x, y, r, strength) {
   const { wet, color } = state;
   if (wet.bleed <= 0 || strength <= 0) return;
+  const pf = paperFluid();
   const gx = x / GRID_F, gy = y / GRID_F;
   const gr = Math.max(1.2, r / GRID_F);
   const x0 = Math.max(1, Math.floor(gx - gr)), x1 = Math.min(GW - 2, Math.ceil(gx + gr));
   const y0 = Math.max(1, Math.floor(gy - gr)), y1 = Math.min(GH - 2, Math.ceil(gy + gr));
-  const wAmt = wet.bleed * 0.6 * strength;
+  const wAmt = wet.bleed * 0.6 * strength * pf.bleedMul;
   const chromatic = color.id !== 'xuanmo';
   const coeff = pigmentCoeffs(color, wet, state.paper.tint);
-  // 该墨级的目标浓度：颜料只向它渐近靠拢、永不超出——
-  // 反复涂抹不会越积越黑，浅墨恒浅，而注水照旧、流动感不减
   const dTarget = Math.pow(wet.alpha, chromatic ? 0.68 : 0.82) * 1.15 * Math.min(1, strength);
   const tR = dTarget * coeff.kR, tG = dTarget * coeff.kG, tB = dTarget * coeff.kB;
 
@@ -355,7 +450,7 @@ function deposit(x, y, r, strength) {
       const i = cy * GW + cx;
       const fall = 1 - dist;
       water[i] = Math.min(2.5, water[i] + wAmt * fall * perm[i]);
-      const rate = 0.16 * fall * (0.35 + 0.65 * Math.min(1, perm[i]));
+      const rate = 0.16 * fall * (0.35 + 0.65 * Math.min(1, perm[i])) * pf.depositMul;
       if (pigR[i] < tR) pigR[i] += (tR - pigR[i]) * rate;
       if (pigG[i] < tG) pigG[i] += (tG - pigG[i]) * rate;
       if (pigB[i] < tB) pigB[i] += (tB - pigB[i]) * rate;
@@ -368,6 +463,7 @@ function deposit(x, y, r, strength) {
 // 每帧渗流：水往低处与纤维疏松处走，颜料随水迁移（略滞后，干后边缘留痕）
 function fluidStep() {
   if (fluidIdle) return;
+  const pf = paperFluid();
   fluidFlip = !fluidFlip;
   let any = false;
 
@@ -382,14 +478,13 @@ function fluidStep() {
       any = true;
       const cap = w * 0.15;
 
-      // 上右下左，逐一渗流：低扩散 + 高定向渗流，保留指状前沿
       let n = i - GW;
       for (let k = 0; k < 4; k++) {
         const dw = w - water[n];
-        let f = (dw * 0.1 + w * 0.06) * perm[n];
+        let f = (dw * 0.1 + w * 0.06) * perm[n] * pf.flowMul;
         if (f > 0) {
           if (f > cap) f = cap;
-          const frac = (f / w) * 0.5;   // 颜料略滞后于水，干后边缘留痕
+          const frac = (f / w) * 0.5;
           water[n] += f;
           const mR = pigR[i] * frac, mG = pigG[i] * frac, mB = pigB[i] * frac;
           pigR[i] -= mR; pigR[n] += mR;
@@ -399,13 +494,12 @@ function fluidStep() {
         }
         n = k === 0 ? i + 1 : k === 1 ? i + GW : i - 1;
       }
-      // 颜料固着：水将尽时迅速咬纸，水足时缓慢沉淀——干透后便不再流动
-      const fr = w < 0.08 ? 0.025 : 0.002;
+      const fr = w < 0.08 ? 0.025 * pf.absorbMul : 0.002 * pf.absorbMul;
       if (pigR[i] > 0) { const m = pigR[i] * fr; pigR[i] -= m; fixR[i] += m; }
       if (pigG[i] > 0) { const m = pigG[i] * fr; pigG[i] -= m; fixG[i] += m; }
       if (pigB[i] > 0) { const m = pigB[i] * fr; pigB[i] -= m; fixB[i] += m; }
-      // 蒸发与吸纸（放缓，墨保湿更久、徐徐而干）
-      water[i] = Math.max(0, w * 0.9975 - 0.0001);
+      const evap = 0.0025 * pf.absorbMul;
+      water[i] = Math.max(0, w * (1 - evap) - 0.0001 * pf.absorbMul);
     }
   }
   if (any) { fluidDirty = true; dirty = true; }
@@ -439,48 +533,166 @@ function flattenInk() {
 /* ───────────── 宣纸纹理 ───────────── */
 
 function paintPaper() {
-  pctx.fillStyle = state.paper.tint;
+  const paper = state.paper;
+  const tex = paperTex(paper);
+  const gain = tex.gain ?? 1.45;
+  const rng = makePaperRng(paper.id, 17);
+  const tint = paper.tint;
+
+  pctx.fillStyle = tint;
   pctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  // 肌理噪点
-  for (let i = 0; i < 3200; i++) {
-    const x = rand(CANVAS_W), y = rand(CANVAS_H);
-    const darkish = Math.random() < 0.6;
-    pctx.fillStyle = darkish
-      ? `rgba(110,92,60,${rand(0.01, 0.05)})`
-      : `rgba(255,255,250,${rand(0.02, 0.07)})`;
-    pctx.fillRect(x, y, rand(0.6, 2), rand(0.6, 2));
+  // 底色不均：纸面局部略深/略浅
+  if (tex.wash > 0) {
+    for (let i = 0; i < 24; i++) {
+      const x = rng.range(0, CANVAS_W), y = rng.range(0, CANVAS_H);
+      const rad = rng.range(90, 320);
+      const warm = rng.chance(tex.fiberWarm);
+      const g = pctx.createRadialGradient(x, y, 0, x, y, rad);
+      if (warm) {
+        g.addColorStop(0, tintShade(tint, -22, -14, -32, tex.wash * 0.72 * gain));
+        g.addColorStop(1, tintShade(tint, 0, 0, 0, 0));
+      } else {
+        g.addColorStop(0, tintShade(tint, 10, 10, 14, tex.wash * 0.58 * gain));
+        g.addColorStop(1, tintShade(tint, 0, 0, 0, 0));
+      }
+      pctx.fillStyle = g;
+      pctx.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+    }
+  }
+
+  // 月白笺：大块柔云
+  if (tex.cloud > 0) {
+    for (let i = 0; i < tex.cloud; i++) {
+      const x = rng.range(0, CANVAS_W), y = rng.range(0, CANVAS_H);
+      const rad = rng.range(130, 380);
+      const g = pctx.createRadialGradient(x, y, 0, x, y, rad);
+      g.addColorStop(0, tintShade(tint, 8, 12, 18, rng.range(0.06, 0.13) * gain));
+      g.addColorStop(0.55, tintShade(tint, 3, 5, 10, rng.range(0.025, 0.05) * gain));
+      g.addColorStop(1, tintShade(tint, 0, 0, 0, 0));
+      pctx.fillStyle = g;
+      pctx.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+    }
+  }
+
+  // 纸絮团（茶笺等粗纸）
+  for (let i = 0; i < tex.pulp; i++) {
+    const x = rng.range(0, CANVAS_W), y = rng.range(0, CANVAS_H);
+    const rx = rng.range(5, 18), ry = rng.range(4, 13);
+    const g = pctx.createRadialGradient(x, y, 0, x, y, Math.max(rx, ry));
+    g.addColorStop(0, tintShade(tint, -28, -22, -16, rng.range(0.09, 0.2) * gain));
+    g.addColorStop(0.7, tintShade(tint, -10, -8, -5, rng.range(0.035, 0.08) * gain));
+    g.addColorStop(1, tintShade(tint, 0, 0, 0, 0));
+    pctx.fillStyle = g;
+    pctx.save();
+    pctx.translate(x, y);
+    pctx.rotate(rng.range(0, TAU));
+    pctx.scale(1, ry / rx);
+    pctx.beginPath();
+    pctx.arc(0, 0, rx, 0, TAU);
+    pctx.fill();
+    pctx.restore();
+  }
+
+  // 中尺度斑驳（介于细颗粒与絮团之间，肉眼更易察觉）
+  const mottle = tex.mottle ?? 0;
+  for (let i = 0; i < mottle; i++) {
+    const x = rng.range(0, CANVAS_W), y = rng.range(0, CANVAS_H);
+    const s = rng.range(2, 5.5);
+    const dark = rng.chance(tex.grainDark);
+    pctx.fillStyle = dark
+      ? tintShade(tint, -48, -40, -30, rng.range(0.035, 0.11) * gain)
+      : tintShade(tint, 14, 12, 8, rng.range(0.04, 0.12) * gain);
+    pctx.fillRect(x, y, s, s * rng.range(0.75, 1.15));
+  }
+
+  // 细颗粒肌理
+  for (let i = 0; i < tex.grain; i++) {
+    const x = rng.range(0, CANVAS_W), y = rng.range(0, CANVAS_H);
+    const dark = rng.chance(tex.grainDark);
+    if (dark) {
+      pctx.fillStyle = tintShade(tint, -62, -52, -38, rng.range(0.022, 0.085) * gain);
+    } else {
+      pctx.fillStyle = tintShade(tint, 20, 18, 14, rng.range(0.03, 0.095) * gain);
+    }
+    pctx.fillRect(x, y, rng.range(0.6, 2.8), rng.range(0.6, 2.8));
   }
 
   // 纸纤维
   pctx.lineCap = 'round';
-  for (let i = 0; i < 150; i++) {
-    const x = rand(CANVAS_W), y = rand(CANVAS_H);
-    const a = rand(TAU), len = rand(8, 36);
-    pctx.strokeStyle = `rgba(120,100,68,${rand(0.015, 0.045)})`;
-    pctx.lineWidth = rand(0.4, 0.9);
+  const [fMin, fMax] = tex.fiberLen;
+  for (let i = 0; i < tex.fiber; i++) {
+    const x = rng.range(0, CANVAS_W), y = rng.range(0, CANVAS_H);
+    const a = rng.range(0, TAU);
+    const len = rng.range(fMin, fMax);
+    const warm = rng.chance(tex.fiberWarm);
+    pctx.strokeStyle = warm
+      ? tintShade(tint, -48, -38, -24, rng.range(0.024, 0.072) * gain)
+      : tintShade(tint, -22, -18, -28, rng.range(0.018, 0.058) * gain);
+    pctx.lineWidth = rng.range(0.45, 1.15);
     pctx.beginPath();
     pctx.moveTo(x, y);
     pctx.quadraticCurveTo(
-      x + Math.cos(a) * len * 0.5 + gauss() * 4,
-      y + Math.sin(a) * len * 0.5 + gauss() * 4,
+      x + Math.cos(a) * len * 0.5 + (rng.next() - 0.5) * 8,
+      y + Math.sin(a) * len * 0.5 + (rng.next() - 0.5) * 8,
       x + Math.cos(a) * len, y + Math.sin(a) * len);
     pctx.stroke();
   }
 
-  // 四边微暗，似旧纸
-  const g = pctx.createRadialGradient(
-    CANVAS_W / 2, CANVAS_H / 2, Math.min(CANVAS_W, CANVAS_H) * 0.42,
-    CANVAS_W / 2, CANVAS_H / 2, Math.max(CANVAS_W, CANVAS_H) * 0.75);
-  g.addColorStop(0, 'rgba(90,72,42,0)');
-  g.addColorStop(1, 'rgba(90,72,42,0.06)');
-  pctx.fillStyle = g;
-  pctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  // 四边微暗
+  if (tex.vignette > 0) {
+    const g = pctx.createRadialGradient(
+      CANVAS_W / 2, CANVAS_H / 2, Math.min(CANVAS_W, CANVAS_H) * 0.42,
+      CANVAS_W / 2, CANVAS_H / 2, Math.max(CANVAS_W, CANVAS_H) * 0.75);
+    g.addColorStop(0, tintShade(tint, -40, -32, -24, 0));
+    g.addColorStop(1, tintShade(tint, -40, -32, -24, tex.vignette * gain));
+    pctx.fillStyle = g;
+    pctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  }
 
   dirty = true;
 }
 
 /* ───────────── 笔触引擎 ───────────── */
+
+function strokeTaperApplies() {
+  const t = brushProfile().type;
+  return t === 'fine' || t === 'soft';
+}
+
+function strokeTaperMul(t) {
+  if (!strokeTaperApplies()) return 1;
+  const id = state.strokeTaper || 'belly';
+  t = clamp(t, 0, 1);
+  if (id === 'out') return lerp(0.96, 0.24, Math.pow(t, 0.82));
+  if (id === 'in') return lerp(0.24, 0.96, Math.pow(t, 0.82));
+  if (id === 'even') return 0.82;
+  const s = Math.sin(Math.PI * t);
+  return 0.26 + 0.74 * s * s;
+}
+
+function strokeStartWidthMul() {
+  return strokeTaperApplies() ? strokeTaperMul(0) * 0.55 : 0.35;
+}
+
+function strokeTEstTotal(st) {
+  const d = st.dist || 0;
+  const brush = brushProfile();
+  if (!st.estLen) st.estLen = Math.max(brush.size * 18, 48);
+  if (d > st.estLen * 0.9) st.estLen = d / 0.9;
+  return st.estLen;
+}
+
+function strokeTProg(st, extra = 0) {
+  const dist = (st.dist || 0) + extra;
+  return clamp(dist / strokeTEstTotal(st), 0, 1);
+}
+
+function finalizeStrokeLength(st) {
+  if (!st) return;
+  const d = st.dist || 0;
+  if (d > 0) st.estLen = d;
+}
 
 function strokeWidth(vel) {
   const { wet } = state;
@@ -635,13 +847,17 @@ function drawBristles(p0, p1, w) {
   }
 }
 
-function stampSegment(p0, p1, vel) {
+function stampSegment(p0, p1, vel, optT0, optT1) {
   const st = state.stroke;
   const brush = brushProfile();
-  const target = strokeWidth(vel);
-  if (st.curW === undefined) st.curW = target;
   const dx = p1.x - p0.x, dy = p1.y - p0.y;
   const d = Math.hypot(dx, dy) || 0.01;
+  const explicit = optT0 !== undefined && optT1 !== undefined;
+  const segT0 = explicit ? optT0 : strokeTProg(st, 0);
+  const segT1 = explicit ? optT1 : strokeTProg(st, d);
+  const tMid = (segT0 + segT1) * 0.5;
+  const target = strokeWidth(vel) * strokeTaperMul(tMid);
+  if (st.curW === undefined) st.curW = target;
   if (d > 0.5) st.dir = Math.atan2(dy, dx);
   const ang = st.dir || 0;
 
@@ -653,7 +869,7 @@ function stampSegment(p0, p1, vel) {
       sctx.lineCap = 'round';
       sctx.strokeStyle = pigmentHex(state.color);
       sctx.globalAlpha = 0.65 * strokeFade;
-      sctx.lineWidth = Math.max(1, st.curW * 0.72);
+      sctx.lineWidth = Math.max(0.8, target * 0.72);
       sctx.beginPath();
       sctx.moveTo(p0.x, p0.y);
       sctx.lineTo(p1.x, p1.y);
@@ -664,12 +880,14 @@ function stampSegment(p0, p1, vel) {
     const spacing = Math.max(1.2, st.curW * (brush.type === 'fine' ? 0.16 : 0.22) * brush.spacingMul);
     const steps = Math.max(1, Math.ceil(d / spacing));
     for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      // 笔头蓄墨有惯性，粗细随速度渐变而非突变
-      st.curW += (target - st.curW) * 0.12;
-      stamp(lerp(p0.x, p1.x, t), lerp(p0.y, p1.y, t), st.curW / 2, vel, ang);
+      const u = i / steps;
+      const tStep = explicit ? lerp(segT0, segT1, u) : strokeTProg(st, d * u);
+      const wTarget = strokeWidth(vel) * strokeTaperMul(tStep);
+      st.curW += (wTarget - st.curW) * 0.12;
+      stamp(lerp(p0.x, p1.x, u), lerp(p0.y, p1.y, u), st.curW / 2, vel, ang);
     }
   }
+  if (!explicit) st.dist = (st.dist || 0) + d;
   dirty = true;
 }
 
@@ -693,7 +911,7 @@ function stampQuadratic(a, c, b, vel) {
 // 收笔出锋：抬笔后顺势带出一小段渐淡的墨尾，含蓄不抢戏
 function finishStroke() {
   const st = state.stroke;
-  if (!st || state.washing || !state.last) return;
+  if (!st || state.washing || !state.last || st.refined) return;
   if (brushProfile().type === 'broad') return;
   const cw = st.curW || strokeWidth(state.vel);
   if (cw < 2.5) return;
@@ -706,15 +924,287 @@ function finishStroke() {
   const steps = Math.max(3, Math.round(len / 2.2));
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ang += gauss() * 0.03;                        // 笔锋微颤
+    ang += gauss() * 0.03;
     x += Math.cos(ang) * (len / steps);
     y += Math.sin(ang) * (len / steps);
-    // 以淡出为主、收细为辅，避免刻意的尖角
+    const tailK = strokeTaperMul(1);
     strokeFade = Math.pow(1 - t, 1.6) * 0.75;
-    stamp(x, y, Math.max(0.5, (cw / 2) * (1 - t * 0.55)), state.vel, ang);
+    stamp(x, y, Math.max(0.5, (cw / 2) * tailK * (1 - t * 0.35)), state.vel, ang);
   }
   strokeFade = 1;
   dirty = true;
+}
+
+/* ───────────── 停笔顺线（狼毫 / 羊毫 · Phase A/B）───────────── */
+
+const HOLD_REFINE_MS = 1000;
+const HOLD_MOVE_EPS = 3.2;
+const HOLD_MIN_SPAN = 22;
+const HOLD_STRAIGHT_PX = 8;       // 垂距阈值（放宽，手抖仍算直线）
+const HOLD_STRAIGHT_RATIO = 0.045; // 垂距 / 弦长
+const HOLD_ARC_RATIO = 1.058;      // 路径长 / 弦长，接近 1 即意向直线
+const HOLD_SIMPLIFY_EPS = 4.2;      // Douglas–Peucker 去抖（直线判定用）
+const HOLD_CURVE_SIMPLIFY_EPS = 12; // 曲线顺线：粗简化，只留大转折
+const HOLD_CURVE_SIMPLIFY_MAX = 5;  // 简化后最多保留点数
+const HOLD_CHAIKIN_PASSES = 2;
+
+let holdProgress = 0;
+
+function holdRefineOk() {
+  const t = brushProfile().type;
+  return state.holdRefine && !state.washing && (t === 'fine' || t === 'soft');
+}
+
+function restorePreStrokeFluid() {
+  const s = undoStack[undoStack.length - 1];
+  if (!s) return;
+  water.set(s.water);
+  pigR.set(s.pr);
+  pigG.set(s.pg);
+  pigB.set(s.pb);
+  fixR.set(s.fr);
+  fixG.set(s.fg);
+  fixB.set(s.fb);
+  inkAge.set(s.age);
+  fluidDirty = true;
+  fluidIdle = false;
+}
+
+function clearStrokeBuffer() {
+  sctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+}
+
+function pathLengthPts(pts) {
+  let l = 0;
+  for (let i = 1; i < pts.length; i++) {
+    l += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  }
+  return l;
+}
+
+function maxPerpDist(pts, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy || 1;
+  let max = 0;
+  for (const p of pts) {
+    const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0, 1);
+    const px = a.x + t * dx, py = a.y + t * dy;
+    max = Math.max(max, Math.hypot(p.x - px, p.y - py));
+  }
+  return max;
+}
+
+function pathMetrics(pts) {
+  const a = pts[0], b = pts[pts.length - 1];
+  const span = Math.hypot(b.x - a.x, b.y - a.y);
+  const length = pathLengthPts(pts);
+  const maxPerp = maxPerpDist(pts, a, b);
+  const arcRatio = span > 0.01 ? length / span : 1;
+  return { a, b, span, length, maxPerp, arcRatio };
+}
+
+function perpDistPt(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy || 1;
+  const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0, 1);
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// 去掉运笔采样抖动，保留大转折
+function simplifyPath(pts, eps) {
+  if (pts.length <= 2) return pts.map(p => ({ ...p }));
+  let maxD = 0, idx = 0;
+  const a = pts[0], b = pts[pts.length - 1];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = perpDistPt(pts[i], a, b);
+    if (d > maxD) { maxD = d; idx = i; }
+  }
+  if (maxD <= eps) return [{ ...a }, { ...b }];
+  const left = simplifyPath(pts.slice(0, idx + 1), eps);
+  const right = simplifyPath(pts.slice(idx), eps);
+  return left.slice(0, -1).concat(right);
+}
+
+function isStraightIntent(m) {
+  return m.maxPerp < HOLD_STRAIGHT_PX
+    || m.maxPerp / m.span < HOLD_STRAIGHT_RATIO
+    || m.arcRatio < HOLD_ARC_RATIO;
+}
+
+// Chaikin 角切：起收点不动
+function chaikinSmooth(pts) {
+  if (pts.length < 3) return pts.map(p => ({ ...p }));
+  const out = [{ ...pts[0] }];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i], p1 = pts[i + 1];
+    if (i > 0) {
+      out.push({ x: lerp(p0.x, p1.x, 0.25), y: lerp(p0.y, p1.y, 0.25) });
+    }
+    if (i < pts.length - 2) {
+      out.push({ x: lerp(p0.x, p1.x, 0.75), y: lerp(p0.y, p1.y, 0.75) });
+    }
+  }
+  out.push({ ...pts[pts.length - 1] });
+  return out;
+}
+
+function chaikinSmoothN(pts, passes = HOLD_CHAIKIN_PASSES) {
+  let cur = pts.map(p => ({ ...p }));
+  for (let i = 0; i < passes; i++) cur = chaikinSmooth(cur);
+  return cur;
+}
+
+function simplifyForCurve(pts) {
+  let eps = HOLD_CURVE_SIMPLIFY_EPS;
+  let cur = simplifyPath(pts, eps);
+  while (cur.length > HOLD_CURVE_SIMPLIFY_MAX && eps < 52) {
+    eps *= 1.3;
+    cur = simplifyPath(pts, eps);
+  }
+  return cur;
+}
+
+// 过点二次贝塞尔链：段间 C1 连续，无 Catmull 尖折
+function drawSmoothQuadChain(pts) {
+  if (pts.length < 2) return;
+  if (pts.length === 2) {
+    stampSegment(pts[0], pts[1], 0.45, 0, 1);
+    return;
+  }
+
+  const vel = 0.45;
+  let tPrev = 0;
+  let acc = 0;
+
+  let estTotal = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const start = i === 1 ? pts[0] : {
+      x: (pts[i - 1].x + pts[i].x) * 0.5,
+      y: (pts[i - 1].y + pts[i].y) * 0.5,
+    };
+    const end = i < pts.length - 2
+      ? { x: (pts[i].x + pts[i + 1].x) * 0.5, y: (pts[i].y + pts[i + 1].y) * 0.5 }
+      : pts[pts.length - 1];
+    estTotal += Math.hypot(end.x - start.x, end.y - start.y) * 1.12;
+  }
+  estTotal = Math.max(estTotal, 1);
+
+  for (let i = 1; i < pts.length - 1; i++) {
+    const cp = pts[i];
+    const quadStart = i === 1 ? pts[0] : {
+      x: (pts[i - 1].x + pts[i].x) * 0.5,
+      y: (pts[i - 1].y + pts[i].y) * 0.5,
+    };
+    const end = i < pts.length - 2
+      ? { x: (pts[i].x + pts[i + 1].x) * 0.5, y: (pts[i].y + pts[i + 1].y) * 0.5 }
+      : { ...pts[pts.length - 1] };
+
+    const chord = Math.hypot(end.x - quadStart.x, end.y - quadStart.y);
+    const steps = Math.max(3, Math.ceil(chord / 3.5));
+    let segPrev = { ...quadStart };
+
+    for (let j = 1; j <= steps; j++) {
+      const u = j / steps;
+      const r = 1 - u;
+      const pt = {
+        x: r * r * quadStart.x + 2 * r * u * cp.x + u * u * end.x,
+        y: r * r * quadStart.y + 2 * r * u * cp.y + u * u * end.y,
+      };
+      acc += Math.hypot(pt.x - segPrev.x, pt.y - segPrev.y);
+      const tGlobal = clamp(acc / estTotal, 0, 1);
+      stampSegment(segPrev, pt, vel, tPrev, tGlobal);
+      segPrev = pt;
+      tPrev = tGlobal;
+    }
+  }
+}
+
+function recordStrokePoint(p) {
+  const st = state.stroke;
+  if (!st?.points || st.refined) return;
+  const n = st.points.length;
+  if (n && Math.hypot(p.x - st.points[n - 1].x, p.y - st.points[n - 1].y) < 1.2) return;
+  st.points.push({ x: p.x, y: p.y });
+}
+
+function drawRefinedPath(pts) {
+  const m = pathMetrics(pts);
+  if (m.span < HOLD_MIN_SPAN) return null;
+
+  strokeFade = 1;
+  const straight = isStraightIntent(m);
+
+  if (straight) {
+    // 意向直线：起收点一条，不再分段戳印
+    stampSegment(m.a, m.b, 0.45, 0, 1);
+    return 'straight';
+  }
+
+  // 曲线：粗简化 → 双 Chaikin → 二次贝塞尔链（无段间尖角）
+  const simplified = simplifyForCurve(pts);
+  if (simplified.length <= 2 || pathLengthPts(simplified) < HOLD_MIN_SPAN) {
+    stampSegment(m.a, m.b, 0.45, 0, 1);
+    return 'straight';
+  }
+  const sm = pathMetrics(simplified);
+  if (isStraightIntent(sm)) {
+    stampSegment(sm.a, sm.b, 0.45, 0, 1);
+    return 'straight';
+  }
+
+  drawSmoothQuadChain(chaikinSmoothN(simplified));
+  return 'curve';
+}
+
+function applyHoldRefine() {
+  const st = state.stroke;
+  if (!st || st.refined || !holdRefineOk()) return;
+  const pts = st.points;
+  if (!pts || pts.length < 2 || pathLengthPts(pts) < HOLD_MIN_SPAN) return;
+
+  restorePreStrokeFluid();
+  clearStrokeBuffer();
+  st.curW = strokeWidth(0.45) * strokeStartWidthMul();
+  const kind = drawRefinedPath(pts);
+  if (!kind) return;
+
+  st.refined = true;
+  st.locked = true;
+  holdProgress = 0;
+  st.stillSince = null;
+  toast(kind === 'straight' ? '笔停 · 已化直' : '笔停 · 已化顺');
+  dirty = true;
+}
+
+function checkHoldRefine(now, p) {
+  const st = state.stroke;
+  if (!st || st.refined || st.locked || !holdRefineOk()) {
+    holdProgress = 0;
+    if (st) st.stillSince = null;
+    return;
+  }
+  const anchor = st.lastMove || state.last;
+  if (Math.hypot(p.x - anchor.x, p.y - anchor.y) > HOLD_MOVE_EPS) {
+    st.stillSince = null;
+    holdProgress = 0;
+    return;
+  }
+  if (!st.stillSince) st.stillSince = now;
+  holdProgress = clamp((now - st.stillSince) / HOLD_REFINE_MS, 0, 1);
+  if (now - st.stillSince >= HOLD_REFINE_MS) applyHoldRefine();
+  syncHoldRingVisual();
+}
+
+function syncHoldRingVisual() {
+  if (!state.pointerClient || $('#view-paint').classList.contains('hidden')) return;
+  const holding = holdProgress > 0 && holdRefineOk() && state.painting && !state.stroke?.locked;
+  ring.classList.toggle('hold', holding);
+  if (holding) {
+    const spread = 2 + holdProgress * 10;
+    ring.style.boxShadow = `0 0 0 ${spread}px rgba(161,53,36,${0.12 + holdProgress * 0.38})`;
+  } else if (!state.washing) {
+    ring.style.boxShadow = '';
+  }
 }
 
 /* ───────────── 水洗（清水笔） ─────────────
@@ -1200,6 +1690,7 @@ function getPos(e) {
 view.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   e.preventDefault();
+  state.pointerClient = { x: e.clientX, y: e.clientY };
   try { view.setPointerCapture(e.pointerId); } catch { /* 部分浏览器不支持 */ }
   if (state.placing) {
     const p = getPos(e);
@@ -1213,21 +1704,36 @@ view.addEventListener('pointerdown', e => {
   state.last = getPos(e);
   state.lastT = performance.now();
   state.vel = 0;
-  // 起笔尖入：以细锋落纸，随运笔渐展笔腹；侧锋偏向随机一侧
+  // 起笔粗细：「锋」仅狼毫/羊毫；斗笔、散锋保持原阔笔逻辑
+  const bp = brushProfile();
   state.stroke = {
     bristles: makeBristles(),
-    curW: strokeWidth(0) * 0.35,
+    curW: strokeWidth(0) * strokeStartWidthMul(),
+    estLen: Math.max(bp.size * 18, 48),
+    dist: 0,
     dir: 0,
     side: Math.random() < 0.5 ? -1 : 1,
+    points: [{ ...state.last }],
+    stillSince: null,
+    lastMove: { ...state.last },
+    refined: false,
+    locked: false,
   };
   state.qMid = { ...state.last };   // 曲线圆滑的起点（上一段中点）
   if (!state.washing) stampSegment(state.last, state.last, 0);
 });
 
 window.addEventListener('pointermove', e => {
+  state.pointerClient = { x: e.clientX, y: e.clientY };
   updateCursor(e);
   if (!state.painting) return;
   let p = getPos(e);
+  const now = performance.now();
+  if (!state.washing && holdRefineOk()) {
+    if (state.stroke?.locked) return;
+    checkHoldRefine(now, p);
+    if (state.stroke?.locked) return;
+  }
   // 笔随手走而略滞后：指数平滑抹掉鼠标抖动，线条更连贯圆润
   if (!state.washing) {
     p = {
@@ -1235,7 +1741,6 @@ window.addEventListener('pointermove', e => {
       y: lerp(state.last.y, p.y, brushProfile().type === 'fine' ? 0.55 : 0.7),
     };
   }
-  const now = performance.now();
   const d = Math.hypot(p.x - state.last.x, p.y - state.last.y);
   if (d < 1) return;
   const dt = Math.max(1, now - state.lastT);
@@ -1247,23 +1752,38 @@ window.addEventListener('pointermove', e => {
     const mid = { x: (state.last.x + p.x) / 2, y: (state.last.y + p.y) / 2 };
     stampQuadratic(state.qMid, state.last, mid, state.vel);
     state.qMid = mid;
+    recordStrokePoint(p);
+    if (state.stroke) state.stroke.lastMove = { x: p.x, y: p.y };
   }
   state.last = p;
   state.lastT = now;
 });
 
 window.addEventListener('pointerup', () => {
-  if (state.painting) { finishStroke(); commitStroke(); }
+  if (state.painting) {
+    finalizeStrokeLength(state.stroke);
+    finishStroke();
+    commitStroke();
+  }
   state.painting = false;
+  holdProgress = 0;
 });
 window.addEventListener('blur', () => {
-  if (state.painting) commitStroke();
+  if (state.painting) {
+    finalizeStrokeLength(state.stroke);
+    commitStroke();
+  }
   state.painting = false;
+  holdProgress = 0;
 });
 // 触屏上系统手势可能中断指针流，务必提交未完成的一笔
 window.addEventListener('pointercancel', () => {
-  if (state.painting) commitStroke();
+  if (state.painting) {
+    finalizeStrokeLength(state.stroke);
+    commitStroke();
+  }
   state.painting = false;
+  holdProgress = 0;
 });
 
 window.addEventListener('keydown', e => {
@@ -1299,6 +1819,10 @@ function updateCursor(e) {
   ring.style.left = e.clientX + 'px';
   ring.style.top = e.clientY + 'px';
   ring.classList.toggle('water', state.washing);
+  const holding = holdProgress > 0 && holdRefineOk() && state.painting && !state.stroke?.locked;
+  ring.classList.toggle('hold', holding);
+  if (holding) syncHoldRingVisual();
+  else if (!state.washing) ring.style.boxShadow = '';
 }
 
 /* ───────────── 渲染循环 ───────────── */
@@ -1306,6 +1830,9 @@ function updateCursor(e) {
 function loop() {
   fluidStep();
   fluidStep();   // 每帧两次渗流，加快晕染混合
+  if (state.painting && !state.washing && holdRefineOk() && !state.stroke?.locked) {
+    checkHoldRefine(performance.now(), state.stroke?.lastMove || state.last);
+  }
   if (fluidDirty) { renderFluid(); fluidDirty = false; dirty = true; }
   if (dirty) {
     vctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -1380,7 +1907,6 @@ function buildCanvasToolsLeft() {
     it.onclick = () => { state.brush = b; refreshSel(); };
     gBrush.append(it);
   }
-  toolsLeft.append(gBrush);
 
   const gSize = el('div', 'tool-group');
   gSize.append(el('div', 'g-label', '毫'));
@@ -1392,7 +1918,34 @@ function buildCanvasToolsLeft() {
     it.onclick = () => { state.sizeByBrush[state.brush.id] = t.id; refreshSel(); };
     gSize.append(it);
   }
-  toolsLeft.append(gSize);
+
+  const gTaper = el('div', 'tool-group');
+  gTaper.append(el('div', 'g-label', '锋'));
+  for (const t of STROKE_TAPERS) {
+    const it = el('div', 'brush-item',
+      `<span class="b-name">${t.name}</span><span class="b-sub">${t.sub}</span>`);
+    it.dataset.kind = 'taper';
+    it.dataset.id = t.id;
+    it.onclick = () => {
+      state.strokeTaper = t.id;
+      refreshSel();
+      if (IS_COARSE) toast(`${t.name} · ${t.sub}`);
+    };
+    gTaper.append(it);
+  }
+
+  const gHold = el('div', 'tool-group');
+  gHold.append(el('div', 'g-label', '顺'));
+  const holdIt = el('div', 'brush-item',
+    `<span class="b-name">停笔</span><span class="b-sub">顺线</span>`);
+  holdIt.dataset.kind = 'hold';
+  holdIt.dataset.id = 'holdrefine';
+  holdIt.onclick = () => {
+    state.holdRefine = !state.holdRefine;
+    refreshSel();
+    toast(state.holdRefine ? '停笔顺线 · 开' : '停笔顺线 · 关');
+  };
+  gHold.append(holdIt);
 
   const gWet = el('div', 'tool-group');
   gWet.append(el('div', 'g-label', '墨'));
@@ -1405,7 +1958,6 @@ function buildCanvasToolsLeft() {
     wetRow.append(it);
   }
   gWet.append(wetRow);
-  toolsLeft.append(gWet);
 
   const gColor = el('div', 'tool-group');
   gColor.append(el('div', 'g-label', '色'));
@@ -1418,7 +1970,9 @@ function buildCanvasToolsLeft() {
     colRow.append(it);
   }
   gColor.append(colRow);
-  toolsLeft.append(gColor);
+
+  // 双列：笔|毫、锋|顺、墨|色
+  toolsLeft.append(gBrush, gSize, gTaper, gHold, gWet, gColor);
 }
 
 function buildCanvasToolsRight() {
@@ -1430,7 +1984,14 @@ function buildCanvasToolsRight() {
     const it = el('div', 'brush-item',
       `<span class="b-name">${p.name}</span>`);
     it.dataset.id = p.id;
-    it.onclick = () => { state.paper = p; paintPaper(); refreshSel(); };
+    it.onclick = () => {
+      if (state.paper.id === p.id) return;
+      state.paper = p;
+      genPerm();
+      paintPaper();
+      refreshSel();
+      if (IS_COARSE) toast(p.name);
+    };
     gPaper.append(it);
   }
   toolsRight.append(gPaper);
@@ -1459,20 +2020,35 @@ function buildCanvasToolsRight() {
   toolsRight.append(gMark);
 }
 
+function refreshStrokeOptDisabled() {
+  const off = !strokeTaperApplies();
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="taper"], .brush-item[data-kind="hold"]'))
+    it.classList.toggle('disabled', off);
+  for (const g of [toolsLeft.querySelector('.brush-item[data-kind="taper"]'),
+                    toolsLeft.querySelector('.brush-item[data-kind="hold"]')]) {
+    g?.closest('.tool-group')?.classList.toggle('disabled', off);
+  }
+}
+
 function refreshSel() {
   const tierId = state.sizeByBrush[state.brush.id] || 'bao';
   for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="brush"]'))
     it.classList.toggle('sel', it.dataset.id === state.brush.id);
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="taper"]'))
+    it.classList.toggle('sel', it.dataset.id === state.strokeTaper);
   for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="size"]'))
     it.classList.toggle('sel', it.dataset.id === tierId);
   for (const it of toolsLeft.querySelectorAll('.ink-dot'))
     it.classList.toggle('sel', it.dataset.id === state.wet.id);
   for (const it of toolsLeft.querySelectorAll('.color-dot'))
     it.classList.toggle('sel', !state.washing && it.dataset.id === state.color.id);
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="hold"]'))
+    it.classList.toggle('sel', state.holdRefine);
   for (const it of toolsRight.querySelectorAll('.brush-item')) {
     if (it.dataset.id === 'wash') it.classList.toggle('sel', state.washing);
     else it.classList.toggle('sel', it.dataset.id === state.paper.id);
   }
+  refreshStrokeOptDisabled();
 }
 
 function clearPaper() {

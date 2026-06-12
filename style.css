@@ -37,6 +37,60 @@ body {
 
 ::selection { background: rgba(158, 59, 38, 0.18); }
 
+/* ───────────── 全局标注 ───────────── */
+
+.site-credit {
+  position: fixed;
+  right: 16px;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  max-width: min(640px, calc(100vw - 24px));
+  padding: 0;
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--ink-faint);
+  pointer-events: auto;
+}
+
+.credit-item { white-space: nowrap; }
+
+.credit-dot {
+  color: var(--ink-faint);
+  opacity: 0.55;
+  font-size: 9px;
+  line-height: 1;
+  user-select: none;
+}
+
+.credit-link {
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.2s;
+}
+
+.credit-link:hover { color: var(--ink-soft); }
+
+.credit-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--ink-faint);
+  text-decoration: none;
+  opacity: 0.7;
+  transition: color 0.2s, opacity 0.2s;
+}
+
+.credit-icon:hover {
+  color: var(--ink-soft);
+  opacity: 1;
+}
+
 /* ───────────── 画廊 ───────────── */
 
 #view-gallery {
@@ -277,6 +331,21 @@ body {
 
 .brush-item.sel .b-sub { color: var(--cinnabar); }
 
+.tool-group.disabled .g-label,
+.brush-item.disabled {
+  opacity: 0.36;
+  pointer-events: none;
+  cursor: default;
+}
+
+.brush-item.disabled:hover { color: var(--ink-soft); }
+
+.brush-item.disabled.sel {
+  border-left-color: rgba(168, 58, 42, 0.35);
+}
+
+.brush-item.disabled.sel .b-sub { color: rgba(168, 58, 42, 0.45); }
+
 /* 墨 / 色 圆点 */
 .dot-row {
   display: flex;
@@ -369,20 +438,31 @@ body {
   margin: 4px 0;
 }
 
-/* 画布舞台 */
+/* 画布舞台：左右等宽留白，画布始终居中（左栏加宽也不挤偏） */
 #stage {
   flex: 1;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 28px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: start;
+  column-gap: 28px;
   position: relative;
   min-width: 0;
   padding: 26px 12px 0;
 }
 
+#tools-left {
+  grid-column: 1;
+  justify-self: end;
+}
+
 .canvas-wrap {
-  flex: none;
+  grid-column: 2;
+  justify-self: center;
+}
+
+#tools-right {
+  grid-column: 3;
+  justify-self: start;
 }
 
 .canvas-tools {
@@ -393,15 +473,39 @@ body {
   align-items: center;
   gap: 22px;
   padding-top: 4px;
-  max-height: min(92vh, calc((100vw - 520px) * 1.39));
+  max-height: min(92vh, calc((100vw - 616px) * 1.39));
   overflow-y: auto;
   scrollbar-width: none;
+}
+
+/* 左栏双列：笔|毫、锋|顺、墨|色（间距对齐右侧单栏） */
+#tools-left {
+  width: 220px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 16px;
+  align-content: start;
+  align-items: start;
+  padding-top: 4px;
+  overflow-y: visible;
+  max-height: min(92vh, calc((100vw - 616px) * 1.39));
+}
+
+#tools-left .tool-group {
+  width: 100%;
+  min-width: 0;
+}
+
+/* 墨/色：与原先单栏一致，一行两粒 */
+#tools-left .dot-row {
+  max-width: 76px;
+  gap: 10px;
 }
 
 .canvas-tools::-webkit-scrollbar { display: none; }
 
 #paper {
-  height: min(92vh, calc((100vw - 520px) * 1.39));
+  height: min(92vh, calc((100vw - 616px) * 1.39));
   width: auto;
   display: block;
   box-shadow:
@@ -609,6 +713,11 @@ body {
 
 #cursor-ring.water { border-color: rgba(74, 106, 130, 0.85); border-style: dashed; }
 
+#cursor-ring.hold {
+  border-color: rgba(161, 53, 36, 0.75);
+  transition: box-shadow 0.08s linear;
+}
+
 #toast {
   position: fixed;
   left: 50%;
@@ -705,6 +814,16 @@ body {
   .work-del { opacity: 1; width: 30px; height: 30px; font-size: 13px; }
   .gallery-foot { padding: 12px 0 16px; }
 
+  .site-credit {
+    right: 10px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    max-width: calc(100vw - 20px);
+    font-size: 9px;
+    gap: 5px 6px;
+  }
+
+  .credit-icon svg { width: 11px; height: 11px; }
+
   /* ── 绘制页：画布满幅 ── */
   #view-paint { display: block; }
 
@@ -742,9 +861,22 @@ body {
 
   #tools-left {
     left: 0;
+    width: 236px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px 14px;
+    align-content: start;
+    overflow-y: auto;
+    max-height: none;
     border-right: 1px solid var(--line);
     box-shadow: 6px 0 24px rgba(60, 50, 30, 0.12);
     transform: translateX(-105%);
+  }
+
+  /* 触屏圆点放大时仍保持一行两粒 */
+  #tools-left .dot-row {
+    max-width: 67px;
+    gap: 13px;
   }
 
   #tools-right {
@@ -796,7 +928,7 @@ body {
 
   /* ── 抽屉把手 ── */
   .drawer-handle { display: flex; }
-  body.m-left-open #handle-left { transform: translateX(136px); }
+  body.m-left-open #handle-left { transform: translateX(236px); }
   body.m-right-open #handle-right { transform: translateX(-136px); }
   body.m-actions-open #handle-actions { bottom: calc(58px + env(safe-area-inset-bottom)); }
 
