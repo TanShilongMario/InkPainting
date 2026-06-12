@@ -6,7 +6,7 @@
 <title>墨韵 · 水墨画绘制</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@300;400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@300;400;600&family=Zhi+Mang+Xing&family=Long+Cang&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -55,11 +55,31 @@
 
 <!-- 题款 -->
 <div id="inscribe-modal" class="modal hidden">
-  <div class="modal-card">
+  <div class="modal-card modal-card-wide">
     <h3>题款</h3>
-    <label>题词（以空格分列，竖排自右而左）
+    <label>题词（以空格分列，竖排自右而左；简体自动转繁）
       <input id="ins-text" maxlength="40" spellcheck="false" autocomplete="off" placeholder="兴来每独往 胜事空自知">
     </label>
+    <div class="modal-field">
+      <span class="field-label">字体</span>
+      <div class="chip-row" id="ins-font-chips">
+        <button type="button" class="chip sel" data-font="brush">行楷</button>
+        <button type="button" class="chip" data-font="kai">楷体</button>
+        <button type="button" class="chip" data-font="song">宋体</button>
+        <button type="button" class="chip" data-font="light">细宋</button>
+        <button type="button" class="chip" data-font="bold">粗宋</button>
+        <button type="button" class="chip" data-font="cao">草书</button>
+        <button type="button" class="chip" data-font="li">隶意</button>
+      </div>
+    </div>
+    <div class="modal-field">
+      <span class="field-label">大小</span>
+      <div class="chip-row" id="ins-size-chips">
+        <button type="button" class="chip" data-size="sm">小</button>
+        <button type="button" class="chip sel" data-size="md">中</button>
+        <button type="button" class="chip" data-size="lg">大</button>
+      </div>
+    </div>
     <div class="modal-actions">
       <button id="ins-cancel">作罢</button>
       <button id="ins-ok">落款</button>
@@ -71,7 +91,7 @@
 <div id="seal-modal" class="modal hidden">
   <div class="modal-card modal-card-wide">
     <h3>钤印</h3>
-    <label>印文（一至四字）
+    <label>印文（一至四字；简体自动转繁）
       <input id="seal-text" maxlength="4" spellcheck="false" autocomplete="off" placeholder="墨韵">
     </label>
     <div class="modal-field">
@@ -90,6 +110,14 @@
         <button type="button" class="chip" data-font="bold">方劲</button>
       </div>
     </div>
+    <div class="modal-field">
+      <span class="field-label">大小</span>
+      <div class="chip-row" id="seal-size-chips">
+        <button type="button" class="chip" data-size="sm">小</button>
+        <button type="button" class="chip sel" data-size="md">中</button>
+        <button type="button" class="chip" data-size="lg">大</button>
+      </div>
+    </div>
     <div class="seal-preview-wrap">
       <canvas id="seal-preview" width="96" height="96"></canvas>
     </div>
@@ -103,6 +131,7 @@
 <div id="cursor-ring"></div>
 <div id="toast"></div>
 
+<script src="s2t.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

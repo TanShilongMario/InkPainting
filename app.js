@@ -838,7 +838,29 @@ function washSegment(p0, p1) {
 
 /* ───────────── 题款 · 钤印 ───────────── */
 
-const INS_FONT = "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif";
+const INS_FONTS = [
+  { id: 'brush', name: '行楷', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif" },
+  { id: 'kai',   name: '楷体', family: "'Kaiti SC','STKaiti','KaiTi',serif" },
+  { id: 'song',  name: '宋体', family: "'Noto Serif SC','Songti SC','STSong',serif" },
+  { id: 'light', name: '细宋', family: "'Noto Serif SC','Songti SC','STSong',serif", weight: '300' },
+  { id: 'bold',  name: '粗宋', family: "'Noto Serif SC','Songti SC','STSong',serif", weight: '600' },
+  { id: 'cao',   name: '草书', family: "'Zhi Mang Xing','Ma Shan Zheng',cursive" },
+  { id: 'li',    name: '隶意', family: "'Long Cang','Ma Shan Zheng',serif" },
+];
+
+const INS_FONT_SIZES = { sm: 22, md: 30, lg: 42 };
+const SEAL_PX_SIZES = { sm: 88, md: 120, lg: 162 };
+// 钤印叠底：略透、纸纹可透，如油印朱砂
+function sealInkAlpha() { return rand(0.72, 0.86); }
+
+function drawSealImpression(ctx, px, alpha) {
+  const half = px / 2;
+  ctx.save();
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(sealC, -half, -half, px, px);
+  ctx.restore();
+}
 
 const SEAL_FONTS = [
   { id: 'brush', name: '篆意', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif" },
@@ -848,15 +870,38 @@ const SEAL_FONTS = [
 ];
 
 const sealC = document.createElement('canvas');
-sealC.width = sealC.height = 120;
+sealC.width = sealC.height = SEAL_PX_SIZES.md;
 
-const sealDraft = { carve: 'yin', fontId: 'brush' };
+const insDraft = { fontId: 'brush', sizeId: 'md' };
+const sealDraft = { carve: 'yin', fontId: 'brush', sizeId: 'md' };
 
-function sealFontStr(fontId, fs) {
-  const f = SEAL_FONTS.find(x => x.id === fontId) || SEAL_FONTS[0];
+function markFontStr(fonts, fontId, fs) {
+  const f = fonts.find(x => x.id === fontId) || fonts[0];
   const w = f.weight ? `${f.weight} ` : '';
   return `${w}${fs}px ${f.family}`;
 }
+
+function insFontStr(fontId, fs) { return markFontStr(INS_FONTS, fontId, fs); }
+function sealFontStr(fontId, fs) { return markFontStr(SEAL_FONTS, fontId, fs); }
+
+function sealCanvasPx(sizeId) { return SEAL_PX_SIZES[sizeId] || SEAL_PX_SIZES.md; }
+
+function bindChipRow(rootId, draftKey, draft, onPick) {
+  const root = $(rootId);
+  if (!root) return;
+  const attr = draftKey === 'carve' ? 'carve' : draftKey === 'sizeId' ? 'size' : 'font';
+  for (const btn of root.querySelectorAll('.chip')) {
+    btn.onclick = () => {
+      draft[draftKey] = btn.dataset[attr];
+      for (const b of root.querySelectorAll('.chip'))
+        b.classList.toggle('sel', b === btn);
+      onPick?.();
+    };
+  }
+}
+
+// 题款钤印：简体输入默认转繁体（OpenCC 单字表，见 s2t.js）
+const toTrad = typeof toTraditional === 'function' ? toTraditional : s => s;
 
 function sealLayout(chars, s, cx, cy) {
   let fs, pos;
@@ -953,9 +998,12 @@ function applySealWear(c, pts, carve) {
 function renderSeal(txt, opts = {}) {
   const carve = opts.carve || 'yin';
   const fontId = opts.fontId || 'brush';
+  const px = sealCanvasPx(opts.sizeId || 'md');
+  if (sealC.width !== px) sealC.width = sealC.height = px;
   const c = sealC.getContext('2d');
-  c.clearRect(0, 0, 120, 120);
-  const s = 46, cx = 60, cy = 60;
+  c.clearRect(0, 0, px, px);
+  const s = px * 0.383;
+  const cx = px / 2, cy = px / 2;
   const contour = buildSealContour(cx, cy, s);
   const chars = txt.slice(0, 4).split('');
   const { fs, pos } = sealLayout(chars, s, cx, cy);
@@ -964,7 +1012,7 @@ function renderSeal(txt, opts = {}) {
   c.font = sealFontStr(fontId, fs);
 
   if (carve === 'yin') {
-    c.fillStyle = '#a13524';
+    c.fillStyle = 'rgba(161,53,36,0.94)';
     sealContourPath(c, contour);
     c.fill();
     c.globalCompositeOperation = 'destination-out';
@@ -973,9 +1021,9 @@ function renderSeal(txt, opts = {}) {
     applySealWear(c, contour, 'yin');
     c.globalCompositeOperation = 'source-over';
   } else {
-    c.fillStyle = '#a13524';
+    c.fillStyle = 'rgba(161,53,36,0.88)';
     chars.forEach((ch, i) => { if (pos[i]) c.fillText(ch, pos[i][0], pos[i][1]); });
-    c.strokeStyle = 'rgba(161,53,36,0.55)';
+    c.strokeStyle = 'rgba(161,53,36,0.48)';
     c.lineWidth = rand(1.3, 2.1);
     sealContourPath(c, contour);
     c.stroke();
@@ -987,26 +1035,34 @@ function renderSeal(txt, opts = {}) {
 }
 
 function updateSealPreview() {
-  const txt = $('#seal-text').value.trim() || '墨韵';
+  const raw = $('#seal-text').value.trim() || '墨韵';
+  const txt = toTrad(raw);
   renderSeal(txt, sealDraft);
   const prev = $('#seal-preview');
   if (!prev) return;
+  const px = sealCanvasPx(sealDraft.sizeId);
+  const pad = Math.round(px * 0.067);
+  const inner = 96 - pad * 2;
   const pctx = prev.getContext('2d');
   pctx.clearRect(0, 0, 96, 96);
   pctx.fillStyle = '#f4eedd';
   pctx.fillRect(0, 0, 96, 96);
-  pctx.drawImage(sealC, 0, 0, 120, 120, 8, 8, 80, 80);
+  pctx.save();
+  pctx.translate(pad + inner / 2, pad + inner / 2);
+  drawSealImpression(pctx, inner, 0.78);
+  pctx.restore();
 }
 
 function placeInscription(p) {
-  const { text } = state.placing;
+  const { text, fontId = 'brush', sizeId = 'md' } = state.placing;
   state.placing = null;
   view.style.cursor = 'none';
   pushUndo();
 
-  const fs = 30, lh = fs * 1.14, colGap = fs * 1.35;
+  const fs = INS_FONT_SIZES[sizeId] || INS_FONT_SIZES.md;
+  const lh = fs * 1.14, colGap = fs * 1.35;
   const cols = text.split(/[\s/]+/).filter(Boolean);
-  ink.font = `${fs}px ${INS_FONT}`;
+  ink.font = insFontStr(fontId, fs);
   ink.textAlign = 'center';
   ink.textBaseline = 'middle';
   ink.fillStyle = '#26231f';
@@ -1027,18 +1083,17 @@ function placeInscription(p) {
 }
 
 function placeSeal(p) {
-  const { text, carve, fontId } = state.placing;
+  const { text, carve, fontId, sizeId = 'md' } = state.placing;
   state.placing = null;
   view.style.cursor = 'none';
   pushUndo();
-  renderSeal(text, { carve, fontId });
+  renderSeal(text, { carve, fontId, sizeId });
+  const px = sealCanvasPx(sizeId);
   ink.save();
   ink.translate(p.x, p.y);
   ink.rotate(gauss() * 0.04);
-  ink.globalAlpha = 0.95;
-  ink.drawImage(sealC, -60, -60);
+  drawSealImpression(ink, px, sealInkAlpha());
   ink.restore();
-  ink.globalAlpha = 1;
   state.unsaved = true;
   dirty = true;
   toast('钤印已成');
@@ -1065,19 +1120,25 @@ function closeSeal() {
 
 $('#ins-cancel').onclick = closeInscribe;
 $('#ins-ok').onclick = () => {
-  const text = $('#ins-text').value.trim();
+  const text = toTrad($('#ins-text').value.trim());
   if (!text) { toast('请题一两句'); return; }
   closeInscribe();
-  state.placing = { mode: 'inscribe', text };
+  state.placing = {
+    mode: 'inscribe', text,
+    fontId: insDraft.fontId, sizeId: insDraft.sizeId,
+  };
   view.style.cursor = 'crosshair';
   toast('点选画面题款处');
 };
 
 $('#seal-cancel').onclick = closeSeal;
 $('#seal-ok').onclick = () => {
-  const text = $('#seal-text').value.trim() || '墨韵';
+  const text = toTrad($('#seal-text').value.trim() || '墨韵');
   closeSeal();
-  state.placing = { mode: 'seal', text, carve: sealDraft.carve, fontId: sealDraft.fontId };
+  state.placing = {
+    mode: 'seal', text,
+    carve: sealDraft.carve, fontId: sealDraft.fontId, sizeId: sealDraft.sizeId,
+  };
   view.style.cursor = 'crosshair';
   toast('点选画面钤印处');
 };
@@ -1094,23 +1155,11 @@ $('#seal-modal').addEventListener('keydown', e => {
 
 $('#seal-text').addEventListener('input', updateSealPreview);
 
-for (const btn of $('#seal-carve-chips').querySelectorAll('.chip')) {
-  btn.onclick = () => {
-    sealDraft.carve = btn.dataset.carve;
-    for (const b of $('#seal-carve-chips').querySelectorAll('.chip'))
-      b.classList.toggle('sel', b === btn);
-    updateSealPreview();
-  };
-}
-
-for (const btn of $('#seal-font-chips').querySelectorAll('.chip')) {
-  btn.onclick = () => {
-    sealDraft.fontId = btn.dataset.font;
-    for (const b of $('#seal-font-chips').querySelectorAll('.chip'))
-      b.classList.toggle('sel', b === btn);
-    updateSealPreview();
-  };
-}
+bindChipRow('#ins-font-chips', 'fontId', insDraft);
+bindChipRow('#ins-size-chips', 'sizeId', insDraft);
+bindChipRow('#seal-carve-chips', 'carve', sealDraft, updateSealPreview);
+bindChipRow('#seal-font-chips', 'fontId', sealDraft, updateSealPreview);
+bindChipRow('#seal-size-chips', 'sizeId', sealDraft, updateSealPreview);
 
 /* ───────────── 撤销 ───────────── */
 
