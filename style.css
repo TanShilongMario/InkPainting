@@ -7,8 +7,8 @@
   --ink-faint: #b5ac9d;
   --cinnabar: #9e3b26;
   --line: #d3cab7;
-  --serif: 'Noto Serif SC', 'Songti SC', 'STSong', serif;
-  --brush: 'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', cursive;
+  --serif: 'Noto Serif SC', 'Noto Serif TC', 'Songti SC', 'STSong', serif;
+  --brush: 'Ma Shan Zheng', 'Kaiti SC', 'STKaiti', 'KaiTi', 'Noto Serif TC', cursive;
 }
 
 * { box-sizing: border-box; }
@@ -332,6 +332,7 @@ body {
 .brush-item.sel .b-sub { color: var(--cinnabar); }
 
 .tool-group.disabled .g-label,
+.tool-group.disabled .brush-item,
 .brush-item.disabled {
   opacity: 0.36;
   pointer-events: none;

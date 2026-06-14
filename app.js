@@ -11,7 +11,12 @@ const gauss = () => (Math.random() + Math.random() + Math.random()) / 1.5 - 1;
 const lerp = (a, b, t) => a + (b - a) * t;
 const IS_COARSE = matchMedia('(pointer: coarse)').matches;   // 触屏设备
 
+// 逻辑绘制坐标系（笔刷/文字/位置等所有设定均以此为准，永不随分辨率变化）
 const CANVAS_W = 1000, CANVAS_H = 1390;
+// 超采样倍率：内部画布按 SS 倍像素渲染，再以同尺寸显示 —— 仅提升清晰度，相对比例不变
+// 触屏内存预算紧，取较低倍率以防 iOS Safari 闪退
+const SS = IS_COARSE ? 1.5 : 2;
+const DEV_W = Math.round(CANVAS_W * SS), DEV_H = Math.round(CANVAS_H * SS);
 
 /* ───────────── 文房定义 ───────────── */
 
@@ -28,6 +33,24 @@ const STROKE_TAPERS = [
   { id: 'in',    name: '入锋', sub: '渐粗' },   // 先细后粗
   { id: 'even',  name: '匀劲', sub: '均衡' },
   { id: 'belly', name: '鼓腹', sub: '中肥' },   // 两头细、中间粗
+];
+
+// 皴法：仅散锋可用，重写毫束形态/侧锋/干擦/节奏，模拟四种山石皴擦
+//  spread 簇散开度 · clumpMul 簇数 · hairMul 毫数 · gap 起手断毫率 · skip 干擦跳笔率
+//  side 侧锋系数 · body 笔腹墨体 · bodyR 墨体半径 · hairW 毫宽区间 · taper 起收锋 · dab 短点断笔(雨点)
+const CUN_METHODS = [
+  { id: 'pima',    name: '披麻', sub: '长披',
+    spread: 0.94, clumpMul: 1.18, hairMul: 1.25, gap: 0.05, skip: 0.10,
+    side: 0.42, body: 0.16, bodyR: 1.0,  hairW: [0.5, 1.3], taper: 'even',  dab: 0 },
+  { id: 'fupi',    name: '斧劈', sub: '侧扫',
+    spread: 1.18, clumpMul: 0.88, hairMul: 0.95, gap: 0.13, skip: 0.24,
+    side: 1.15, body: 0.20, bodyR: 0.85, hairW: [0.8, 2.1], taper: 'out',   dab: 0 },
+  { id: 'yudian',  name: '雨点', sub: '短点',
+    spread: 0.92, clumpMul: 1.25, hairMul: 0.9, gap: 0.16, skip: 0.42,
+    side: 0.34, body: 0.03, bodyR: 0.6,  hairW: [1.5, 3.4], taper: 'even',  dab: 1, scatter: 1 },
+  { id: 'juanyun', name: '卷云', sub: '圆浑',
+    spread: 0.66, clumpMul: 1.2,  hairMul: 1.5,  gap: 0.05, skip: 0.10,
+    side: 0.5,  body: 0.42, bodyR: 1.4,  hairW: [0.7, 1.8], taper: 'belly', dab: 0, grain: 1 },
 ];
 
 const SIZE_TIERS = [
@@ -273,6 +296,7 @@ const pigmentHex = c => {
 const state = {
   brush: BRUSHES[1],
   strokeTaper: 'belly',
+  cun: 'pima',        // 皴法（散锋专用）
   sizeByBrush: { gongbi: 'bao', xieyi: 'bao', cunca: 'bao', pomo: 'bao' },
   wet: WETNESS[1],
   color: COLORS[0],
@@ -291,18 +315,26 @@ const state = {
   pointerClient: null,
 };
 
+// 绘制上下文：画布按 DEV 像素，叠加 SS 基础变换，使所有绘制仍用逻辑坐标
+function hiCtx(canvas) {
+  canvas.width = DEV_W; canvas.height = DEV_H;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(SS, 0, 0, SS, 0, 0);
+  return ctx;
+}
+
 const view = $('#paper');
+// 合成上下文：DEV 像素、单位变换，直接 1:1 叠合各 DEV 缓冲
+view.width = DEV_W; view.height = DEV_H;
 const vctx = view.getContext('2d');
 
 const inkC = document.createElement('canvas');
-inkC.width = CANVAS_W; inkC.height = CANVAS_H;
-const ink = inkC.getContext('2d');
+const ink = hiCtx(inkC);
 
 // 单笔缓冲：一笔先画在这里（笔内不自累积变深），
 // 抬笔时整笔按墨级透明度压入墨层 —— 墨色梯度因此真实线性
 const strokeC = document.createElement('canvas');
-strokeC.width = CANVAS_W; strokeC.height = CANVAS_H;
-const sctx = strokeC.getContext('2d');
+const sctx = hiCtx(strokeC);
 let strokePending = false;
 
 // 整笔压墨的透明度；淡彩 RGB 已水化，略抬低墨级透明度以免过薄
@@ -317,17 +349,19 @@ function strokeAlpha() {
 
 function commitStroke() {
   if (!strokePending) return;
+  // 单笔缓冲与墨层同为 DEV 像素：临时还原单位变换做精确 1:1 叠合，避免重采样发虚
+  ink.setTransform(1, 0, 0, 1, 0, 0);
   ink.globalAlpha = strokeAlpha();
   ink.drawImage(strokeC, 0, 0);
   ink.globalAlpha = 1;
+  ink.setTransform(SS, 0, 0, SS, 0, 0);
   sctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   strokePending = false;
   dirty = true;
 }
 
 const paperC = document.createElement('canvas');
-paperC.width = CANVAS_W; paperC.height = CANVAS_H;
-const pctx = paperC.getContext('2d');
+const pctx = hiCtx(paperC);
 
 const WASH_PAD = 18, WASH_MAX = 150;
 const washTmp = document.createElement('canvas');
@@ -521,12 +555,12 @@ function renderFluid() {
 // 将墨层与流体层压平为一张含透明度的墨图（存档 / 续画用）
 function flattenInk() {
   const c = document.createElement('canvas');
-  c.width = CANVAS_W; c.height = CANVAS_H;
+  c.width = DEV_W; c.height = DEV_H;
   const x = c.getContext('2d');
   x.drawImage(inkC, 0, 0);
   x.globalCompositeOperation = 'multiply';
   x.imageSmoothingEnabled = true;
-  x.drawImage(fluidC, 0, 0, CANVAS_W, CANVAS_H);
+  x.drawImage(fluidC, 0, 0, DEV_W, DEV_H);
   return c;
 }
 
@@ -655,14 +689,23 @@ function paintPaper() {
 
 /* ───────────── 笔触引擎 ───────────── */
 
+// 当前皴法（仅散锋返回非空）
+function cunMethod() {
+  if (brushProfile().type !== 'bristle') return null;
+  return CUN_METHODS.find(c => c.id === state.cun) || CUN_METHODS[0];
+}
+
 function strokeTaperApplies() {
   const t = brushProfile().type;
   return t === 'fine' || t === 'soft';
 }
 
 function strokeTaperMul(t) {
-  if (!strokeTaperApplies()) return 1;
-  const id = state.strokeTaper || 'belly';
+  let id;
+  const cm = cunMethod();
+  if (cm) id = cm.taper;                       // 散锋：起收锋取自皴法
+  else if (strokeTaperApplies()) id = state.strokeTaper || 'belly';
+  else return 1;
   t = clamp(t, 0, 1);
   if (id === 'out') return lerp(0.96, 0.24, Math.pow(t, 0.82));
   if (id === 'in') return lerp(0.24, 0.96, Math.pow(t, 0.82));
@@ -672,6 +715,7 @@ function strokeTaperMul(t) {
 }
 
 function strokeStartWidthMul() {
+  if (cunMethod()) return strokeTaperMul(0) * 0.6;
   return strokeTaperApplies() ? strokeTaperMul(0) * 0.55 : 0.35;
 }
 
@@ -774,20 +818,26 @@ function stamp(x, y, r, vel, ang = 0) {
   }
 }
 
-// 散锋：一束分叉的笔毫
+// 散锋：一束分叉的笔毫（皴法重塑簇散开度、簇/毫数、毫宽与起手断毫）
 function makeBristles() {
   const { bristleMul } = brushProfile();
+  const cm = cunMethod();
+  const spread = cm ? cm.spread : 0.72;
+  const clumpMul = cm ? cm.clumpMul : 1;
+  const hairMul = cm ? cm.hairMul : 1;
+  const [hw0, hw1] = cm ? cm.hairW : [0.5, 1.6];
+  const gapRate = cm ? cm.gap : 0.12;
   const arr = [];
-  const clumps = Math.max(2, Math.round((3 + (Math.random() * 2 | 0)) * bristleMul));
+  const clumps = Math.max(2, Math.round((3 + (Math.random() * 2 | 0)) * bristleMul * clumpMul));
   for (let c = 0; c < clumps; c++) {
-    const center = ((c + 0.5) / clumps * 2 - 1) * 0.72 + gauss() * 0.08;
-    const hairs = Math.max(1, Math.round((2 + (Math.random() * 3 | 0)) * Math.sqrt(bristleMul)));
+    const center = ((c + 0.5) / clumps * 2 - 1) * spread + gauss() * 0.08;
+    const hairs = Math.max(1, Math.round((2 + (Math.random() * 3 | 0)) * Math.sqrt(bristleMul) * hairMul));
     for (let h = 0; h < hairs; h++) {
       arr.push({
-        off: clamp(center + gauss() * 0.07, -0.85, 0.85),
-        w: rand(0.5, 1.6),
+        off: clamp(center + gauss() * 0.07, -0.92, 0.92),
+        w: rand(hw0, hw1),
         a: rand(0.35, 1),
-        gap: Math.random() < 0.12,
+        gap: Math.random() < gapRate,
       });
     }
   }
@@ -799,31 +849,100 @@ function drawBristles(p0, p1, w) {
   const dx = p1.x - p0.x, dy = p1.y - p0.y;
   const len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len, ny = dx / len;
+  const segAng = Math.atan2(dy, dx);
 
-  // 笔腹墨体：散锋中心一层极淡的墨，让笔毫连成"一笔"而非毛刷
+  const cm = cunMethod();
+  const skipRate = cm ? cm.skip : 0.16;
+  const sideK = cm ? cm.side : 0.55;
+  const dab = cm ? cm.dab : 0;
+  const bodyR = cm ? cm.bodyR : 1;
+  const scatter = cm && cm.scatter ? cm.scatter : 0;
+  const grain = cm && cm.grain ? cm.grain : 0;
+  const ph = pigmentHex(color);
+
+  // 笔腹墨体：散锋中心一层墨，让笔毫连成"一笔"而非毛刷；卷云加大半径并叠层成圆浑厚体
   const midx = (p0.x + p1.x) / 2, midy = (p0.y + p1.y) / 2;
-  const ba = 0.14 * strokeFade;
-  const bg = sctx.createRadialGradient(midx, midy, 0, midx, midy, w * 0.5);
-  bg.addColorStop(0, rgbaInk(color, ba));
-  bg.addColorStop(1, rgbaInk(color, 0));
-  sctx.fillStyle = bg;
-  sctx.beginPath();
-  sctx.arc(midx, midy, w * 0.5, 0, TAU);
-  sctx.fill();
+  const ba = (cm ? cm.body : 0.14) * strokeFade;
+  if (ba > 0.004) {
+    const br = w * 0.5 * bodyR;
+    const bg = sctx.createRadialGradient(midx, midy, 0, midx, midy, br);
+    bg.addColorStop(0, rgbaInk(color, ba));
+    bg.addColorStop(0.6, rgbaInk(color, ba * 0.5));
+    bg.addColorStop(1, rgbaInk(color, 0));
+    sctx.fillStyle = bg;
+    sctx.beginPath();
+    sctx.arc(midx, midy, br, 0, TAU);
+    sctx.fill();
+    if (bodyR > 1.15) {   // 卷云：内核打散成数团，墨体圆浑而不呆板
+      sctx.fillStyle = ph;
+      for (let k = 0; k < 3; k++) {
+        sctx.globalAlpha = ba * rand(0.7, 1.1) * strokeFade;
+        sctx.beginPath();
+        sctx.arc(midx + gauss() * br * 0.35, midy + gauss() * br * 0.35,
+          br * rand(0.28, 0.46), 0, TAU);
+        sctx.fill();
+      }
+      sctx.globalAlpha = 1;
+    }
+    // 卷云：颗粒墨斑 + 飞白破孔，破除平滑感，做出云块肌理
+    if (grain) {
+      const gN = Math.round(br * 1.3 * grain);
+      for (let i = 0; i < gN; i++) {
+        const a = Math.random() * TAU, rr = Math.sqrt(Math.random()) * br * 0.95;
+        const gx = midx + Math.cos(a) * rr, gy = midy + Math.sin(a) * rr;
+        if (Math.random() < 0.62) {
+          sctx.globalAlpha = clamp(ba * rand(0.5, 1.6) * strokeFade, 0, 1);
+          sctx.fillStyle = ph;
+          sctx.beginPath();
+          sctx.arc(gx, gy, rand(0.5, 1.9), 0, TAU);
+          sctx.fill();
+        } else {
+          sctx.globalCompositeOperation = 'destination-out';
+          sctx.globalAlpha = rand(0.18, 0.55);
+          sctx.beginPath();
+          sctx.arc(gx, gy, rand(0.7, 2.2), 0, TAU);
+          sctx.fill();
+          sctx.globalCompositeOperation = 'source-over';
+        }
+      }
+      sctx.globalAlpha = 1;
+    }
+  }
 
   const side = state.stroke.side || 1;
   sctx.lineCap = 'round';
-  const ph = pigmentHex(color);
   sctx.strokeStyle = ph;
   sctx.fillStyle = ph;
   for (const b of state.stroke.bristles) {
     if (Math.random() < 0.03) b.gap = !b.gap;   // 笔毫起落
     if (b.gap) continue;
-    if (Math.random() < 0.16) continue;         // 干擦的断续残痕
+    if (Math.random() < skipRate) continue;     // 干擦的断续残痕
     const off = b.off * w * 0.5;
     const jx = gauss() * 0.5, jy = gauss() * 0.5;
     // 侧锋：一侧的笔毫吃墨重、另一侧轻擦
-    const sideW = clamp(1 + b.off * side * 0.55, 0.35, 1.6);
+    const sideW = clamp(1 + b.off * side * sideK, 0.3, 1.7);
+
+    if (dab) {
+      // 雨点皴：粗短圆点，松散层叠成豆瓣点簇，而非连续毫线
+      const u = Math.random();
+      const exN = off + gauss() * w * 0.42 * (1 + scatter);   // 法向散开
+      const exT = gauss() * w * 0.34 * scatter;               // 切向散开
+      const cx = lerp(p0.x, p1.x, u) + nx * exN + (dx / len) * exT + jx;
+      const cy = lerp(p0.y, p1.y, u) + ny * exN + (dy / len) * exT + jy;
+      const dlen = b.w * (0.55 + w * 0.045) * rand(0.6, 1.3);   // 点的长度
+      const dwid = b.w * (0.45 + w * 0.045) * rand(0.6, 1.2);   // 点的宽度
+      sctx.globalAlpha = clamp(0.78 * b.a * sideW * rand(0.65, 1.05) * strokeFade, 0, 1);
+      sctx.save();
+      sctx.translate(cx, cy);
+      sctx.rotate(segAng + gauss() * 0.5);
+      sctx.beginPath();
+      sctx.ellipse(0, 0, dlen, dwid, 0, 0, TAU);
+      sctx.fill();
+      sctx.restore();
+      sctx.globalAlpha = 1;
+      continue;
+    }
+
     sctx.globalAlpha = 0.8 * b.a * sideW * rand(0.6, 1) * strokeFade;
     sctx.lineWidth = b.w * (0.55 + w * 0.04) * (0.8 + sideW * 0.25);
     sctx.beginPath();
@@ -940,12 +1059,12 @@ function finishStroke() {
 const HOLD_REFINE_MS = 1000;
 const HOLD_MOVE_EPS = 3.2;
 const HOLD_MIN_SPAN = 22;
-const HOLD_STRAIGHT_PX = 8;       // 垂距阈值（放宽，手抖仍算直线）
-const HOLD_STRAIGHT_RATIO = 0.045; // 垂距 / 弦长
-const HOLD_ARC_RATIO = 1.058;      // 路径长 / 弦长，接近 1 即意向直线
+const HOLD_STRAIGHT_PX = 5;        // 垂距阈值（收紧，小弧不再误判直线）
+const HOLD_STRAIGHT_RATIO = 0.03;  // 垂距 / 弦长
+const HOLD_ARC_RATIO = 1.03;       // 路径长 / 弦长，接近 1 才算意向直线
 const HOLD_SIMPLIFY_EPS = 4.2;      // Douglas–Peucker 去抖（直线判定用）
-const HOLD_CURVE_SIMPLIFY_EPS = 12; // 曲线顺线：粗简化，只留大转折
-const HOLD_CURVE_SIMPLIFY_MAX = 5;  // 简化后最多保留点数
+const HOLD_CURVE_SIMPLIFY_EPS = 6;  // 曲线顺线：细简化，保留弧线起伏
+const HOLD_CURVE_SIMPLIFY_MAX = 14; // 简化后最多保留点数（采样加高）
 const HOLD_CHAIKIN_PASSES = 2;
 
 let holdProgress = 0;
@@ -1223,7 +1342,9 @@ function rewet(x, y, R, s, effect) {
   const bx = Math.max(0, Math.floor(x - R)), by = Math.max(0, Math.floor(y - R));
   const bw = Math.min(CANVAS_W - bx, Math.ceil(R * 2)), bh = Math.min(CANVAS_H - by, Math.ceil(R * 2));
   if (bw <= 0 || bh <= 0) return;
-  const im = ink.getImageData(bx, by, bw, bh).data;
+  // 墨层为 DEV 像素：取像素块须按 SS 放大坐标，采样时换算到设备像素
+  const bwD = Math.max(1, Math.round(bw * SS)), bhD = Math.max(1, Math.round(bh * SS));
+  const im = ink.getImageData(Math.round(bx * SS), Math.round(by * SS), bwD, bhD).data;
 
   const x0 = Math.max(1, Math.floor((x - R) / GRID_F)), x1 = Math.min(GW - 2, Math.ceil((x + R) / GRID_F));
   const y0 = Math.max(1, Math.floor((y - R) / GRID_F)), y1 = Math.min(GH - 2, Math.ceil((y + R) / GRID_F));
@@ -1243,7 +1364,9 @@ function rewet(x, y, R, s, effect) {
       // 拾取少量墨色入水（提墨量须大于回写量，水洗才会变淡）
       const ix = px - bx, iy = py - by;
       if (ix < 0 || iy < 0 || ix >= bw || iy >= bh) continue;
-      const j = (iy * bw + ix) * 4;
+      const ixd = clamp(Math.round(ix * SS), 0, bwD - 1);
+      const iyd = clamp(Math.round(iy * SS), 0, bhD - 1);
+      const j = (iyd * bwD + ixd) * 4;
       const a = im[j + 3] / 255;
       if (a < 0.04) continue;
       const pick = a * 0.05 * (0.4 + s) * effect;
@@ -1268,13 +1391,13 @@ function washAt(x, y, mx, my) {
   wctx.clearRect(0, 0, S, S);
   if (FILTER_OK) {
     wctx.filter = `blur(${Math.max(3, R * 0.1).toFixed(1)}px)`;
-    wctx.drawImage(inkC, sx, sy, S, S, 0, 0, S, S);
+    wctx.drawImage(inkC, sx * SS, sy * SS, S * SS, S * SS, 0, 0, S, S);
     wctx.filter = 'none';
   } else {
     // 退化方案：多次低透明度偏移叠印近似模糊
     wctx.globalAlpha = 0.18;
     for (let i = 0; i < 6; i++) {
-      wctx.drawImage(inkC, sx + gauss() * 5, sy + gauss() * 5, S, S, 0, 0, S, S);
+      wctx.drawImage(inkC, (sx + gauss() * 5) * SS, (sy + gauss() * 5) * SS, S * SS, S * SS, 0, 0, S, S);
     }
     wctx.globalAlpha = 1;
   }
@@ -1328,14 +1451,16 @@ function washSegment(p0, p1) {
 
 /* ───────────── 题款 · 钤印 ───────────── */
 
+// 内容默认转繁体：宋体类以 Noto Serif TC 打头取地道繁体字形；
+// 手写体（行楷/草书/隶意/篆意）保留简体手写字库，繁体专有字回退到 Noto Serif TC 兜底
 const INS_FONTS = [
-  { id: 'brush', name: '行楷', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif" },
-  { id: 'kai',   name: '楷体', family: "'Kaiti SC','STKaiti','KaiTi',serif" },
-  { id: 'song',  name: '宋体', family: "'Noto Serif SC','Songti SC','STSong',serif" },
-  { id: 'light', name: '细宋', family: "'Noto Serif SC','Songti SC','STSong',serif", weight: '300' },
-  { id: 'bold',  name: '粗宋', family: "'Noto Serif SC','Songti SC','STSong',serif", weight: '600' },
-  { id: 'cao',   name: '草书', family: "'Zhi Mang Xing','Ma Shan Zheng',cursive" },
-  { id: 'li',    name: '隶意', family: "'Long Cang','Ma Shan Zheng',serif" },
+  { id: 'brush', name: '行楷', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi','Noto Serif TC',serif" },
+  { id: 'kai',   name: '楷体', family: "'Kaiti SC','STKaiti','KaiTi','Noto Serif TC',serif" },
+  { id: 'song',  name: '宋体', family: "'Noto Serif TC','Noto Serif SC','Songti SC','STSong',serif" },
+  { id: 'light', name: '细宋', family: "'Noto Serif TC','Noto Serif SC','Songti SC','STSong',serif", weight: '300' },
+  { id: 'bold',  name: '粗宋', family: "'Noto Serif TC','Noto Serif SC','Songti SC','STSong',serif", weight: '600' },
+  { id: 'cao',   name: '草书', family: "'Zhi Mang Xing','Ma Shan Zheng','Noto Serif TC',cursive" },
+  { id: 'li',    name: '隶意', family: "'Long Cang','Ma Shan Zheng','Noto Serif TC',serif" },
 ];
 
 const INS_FONT_SIZES = { sm: 22, md: 30, lg: 42 };
@@ -1353,10 +1478,10 @@ function drawSealImpression(ctx, px, alpha) {
 }
 
 const SEAL_FONTS = [
-  { id: 'brush', name: '篆意', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi',serif" },
-  { id: 'kai',   name: '楷体', family: "'Kaiti SC','STKaiti','KaiTi',serif" },
-  { id: 'song',  name: '宋体', family: "'Noto Serif SC','Songti SC','STSong',serif" },
-  { id: 'bold',  name: '方劲', family: "'Noto Serif SC','Songti SC','STSong',serif", weight: '600' },
+  { id: 'brush', name: '篆意', family: "'Ma Shan Zheng','Kaiti SC','STKaiti','KaiTi','Noto Serif TC',serif" },
+  { id: 'kai',   name: '楷体', family: "'Kaiti SC','STKaiti','KaiTi','Noto Serif TC',serif" },
+  { id: 'song',  name: '宋体', family: "'Noto Serif TC','Noto Serif SC','Songti SC','STSong',serif" },
+  { id: 'bold',  name: '方劲', family: "'Noto Serif TC','Noto Serif SC','Songti SC','STSong',serif", weight: '600' },
 ];
 
 const sealC = document.createElement('canvas');
@@ -1415,14 +1540,14 @@ function buildSealContour(cx, cy, s) {
   for (let i = 0; i < 4; i++) {
     const c0 = corners[i], c1 = corners[(i + 1) % 4];
     pts.push({
-      x: cx + c0.x + gauss() * 2.8,
-      y: cy + c0.y + gauss() * 2.8,
+      x: cx + c0.x + gauss() * 1.2,
+      y: cy + c0.y + gauss() * 1.2,
     });
     for (let k = 1; k <= 2; k++) {
       const t = k / 3;
       pts.push({
-        x: cx + lerp(c0.x, c1.x, t) + gauss() * 2.2,
-        y: cy + lerp(c0.y, c1.y, t) + gauss() * 1.8,
+        x: cx + lerp(c0.x, c1.x, t) + gauss() * 0.9,
+        y: cy + lerp(c0.y, c1.y, t) + gauss() * 0.8,
       });
     }
   }
@@ -1436,7 +1561,7 @@ function sealContourPath(c, pts) {
   c.closePath();
 }
 
-// 边缘断纹、崩缺
+// 边缘断纹、崩缺：轻微即可，避免"咬掉的奶酪"那种大块破碎
 function applySealEdgeBreaks(c, pts) {
   const n = pts.length;
   c.save();
@@ -1447,39 +1572,45 @@ function applySealEdgeBreaks(c, pts) {
     const p = pts[i];
     const q = pts[(i + 1) % n];
     const a = Math.atan2(q.y - p.y, q.x - p.x);
-    if (Math.random() < 0.42) {
-      c.lineWidth = rand(1.4, 4.2);
+    if (Math.random() < 0.18) {
+      c.globalAlpha = rand(0.5, 0.85);
+      c.lineWidth = rand(0.7, 1.8);
       c.beginPath();
-      c.moveTo(p.x + gauss() * 1.2, p.y + gauss() * 1.2);
-      c.lineTo(p.x + Math.cos(a + gauss() * 0.35) * rand(3, 9),
-        p.y + Math.sin(a + gauss() * 0.35) * rand(3, 9));
+      c.moveTo(p.x + gauss() * 0.8, p.y + gauss() * 0.8);
+      c.lineTo(p.x + Math.cos(a + gauss() * 0.3) * rand(1.5, 4),
+        p.y + Math.sin(a + gauss() * 0.3) * rand(1.5, 4));
       c.stroke();
     }
-    if (Math.random() < 0.28) {
+    if (Math.random() < 0.1) {
+      c.globalAlpha = rand(0.45, 0.8);
       c.beginPath();
-      c.arc(p.x + gauss() * 2, p.y + gauss() * 2, rand(1, 3.8), 0, TAU);
+      c.arc(p.x + gauss() * 1.2, p.y + gauss() * 1.2, rand(0.5, 1.5), 0, TAU);
       c.fill();
     }
   }
-  for (let i = 0; i < 5; i++) {
+  // 极少量略大的崩口，点到为止
+  for (let i = 0; i < 2; i++) {
     const p = pts[(Math.random() * n) | 0];
+    c.globalAlpha = rand(0.5, 0.8);
     c.beginPath();
-    c.arc(p.x, p.y, rand(2.5, 5.5), 0, TAU);
+    c.arc(p.x, p.y, rand(1, 2.4), 0, TAU);
     c.fill();
   }
+  c.globalAlpha = 1;
   c.restore();
 }
 
 function applySealWear(c, pts, carve) {
   const n = pts.length;
   if (carve === 'yang') c.fillStyle = '#a13524';
-  for (let i = 0; i < (carve === 'yin' ? 72 : 40); i++) {
+  for (let i = 0; i < (carve === 'yin' ? 34 : 22); i++) {
     const p = pts[(Math.random() * n) | 0];
-    const px = p.x + gauss() * 2.8;
-    const py = p.y + gauss() * 2.8;
-    c.globalAlpha = carve === 'yin' ? 1 : rand(0.12, 0.4);
+    const px = p.x + gauss() * 2;
+    const py = p.y + gauss() * 2;
+    // 做旧颗粒走半透明，呈轻微斑驳而非密集穿孔
+    c.globalAlpha = carve === 'yin' ? rand(0.3, 0.65) : rand(0.1, 0.32);
     c.beginPath();
-    c.arc(px, py, rand(0.35, 2.2), 0, TAU);
+    c.arc(px, py, rand(0.3, 1.3), 0, TAU);
     c.fill();
   }
   c.globalAlpha = 1;
@@ -1489,8 +1620,11 @@ function renderSeal(txt, opts = {}) {
   const carve = opts.carve || 'yin';
   const fontId = opts.fontId || 'brush';
   const px = sealCanvasPx(opts.sizeId || 'md');
-  if (sealC.width !== px) sealC.width = sealC.height = px;
+  // 印章按 SS 倍像素渲染（布局仍用逻辑 px），盖印放大后边缘依旧清晰
+  const dpx = Math.round(px * SS);
+  if (sealC.width !== dpx) sealC.width = sealC.height = dpx;
   const c = sealC.getContext('2d');
+  c.setTransform(SS, 0, 0, SS, 0, 0);
   c.clearRect(0, 0, px, px);
   const s = px * 0.383;
   const cx = px / 2, cy = px / 2;
@@ -1653,14 +1787,14 @@ bindChipRow('#seal-size-chips', 'sizeId', sealDraft, updateSealPreview);
 
 /* ───────────── 撤销 ───────────── */
 
-// 触屏设备内存预算紧（iOS Safari 易因 ImageData 过多闪退），快照大减
-const UNDO_MAX = IS_COARSE ? 5 : 24;
+// 快照为 DEV 尺寸 ImageData（随 SS² 增大），步数据 SS 收缩以控内存，触屏更紧
+const UNDO_MAX = IS_COARSE ? 3 : 10;
 const undoStack = [];
 
 function pushUndo() {
   if (undoStack.length >= UNDO_MAX) undoStack.shift();
   undoStack.push({
-    img: ink.getImageData(0, 0, CANVAS_W, CANVAS_H),
+    img: ink.getImageData(0, 0, DEV_W, DEV_H),
     water: water.slice(), pr: pigR.slice(), pg: pigG.slice(), pb: pigB.slice(),
     fr: fixR.slice(), fg: fixG.slice(), fb: fixB.slice(), age: inkAge.slice(),
   });
@@ -1835,7 +1969,7 @@ function loop() {
   }
   if (fluidDirty) { renderFluid(); fluidDirty = false; dirty = true; }
   if (dirty) {
-    vctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    vctx.clearRect(0, 0, DEV_W, DEV_H);
     vctx.drawImage(paperC, 0, 0);
     vctx.globalCompositeOperation = 'multiply';
     vctx.drawImage(inkC, 0, 0);
@@ -1846,7 +1980,7 @@ function loop() {
       vctx.globalAlpha = 1;
     }
     vctx.imageSmoothingEnabled = true;
-    vctx.drawImage(fluidC, 0, 0, CANVAS_W, CANVAS_H);
+    vctx.drawImage(fluidC, 0, 0, DEV_W, DEV_H);
     vctx.globalCompositeOperation = 'source-over';
     dirty = false;
   }
@@ -1920,7 +2054,7 @@ function buildCanvasToolsLeft() {
   }
 
   const gTaper = el('div', 'tool-group');
-  gTaper.append(el('div', 'g-label', '锋'));
+  gTaper.append(el('div', 'g-label taper-label', '锋'));
   for (const t of STROKE_TAPERS) {
     const it = el('div', 'brush-item',
       `<span class="b-name">${t.name}</span><span class="b-sub">${t.sub}</span>`);
@@ -1930,6 +2064,18 @@ function buildCanvasToolsLeft() {
       state.strokeTaper = t.id;
       refreshSel();
       if (IS_COARSE) toast(`${t.name} · ${t.sub}`);
+    };
+    gTaper.append(it);
+  }
+  for (const c of CUN_METHODS) {
+    const it = el('div', 'brush-item',
+      `<span class="b-name">${c.name}</span><span class="b-sub">${c.sub}</span>`);
+    it.dataset.kind = 'cun';
+    it.dataset.id = c.id;
+    it.onclick = () => {
+      state.cun = c.id;
+      refreshSel();
+      if (IS_COARSE) toast(`${c.name}皴 · ${c.sub}`);
     };
     gTaper.append(it);
   }
@@ -2021,21 +2167,32 @@ function buildCanvasToolsRight() {
 }
 
 function refreshStrokeOptDisabled() {
-  const off = !strokeTaperApplies();
-  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="taper"], .brush-item[data-kind="hold"]'))
-    it.classList.toggle('disabled', off);
-  for (const g of [toolsLeft.querySelector('.brush-item[data-kind="taper"]'),
-                    toolsLeft.querySelector('.brush-item[data-kind="hold"]')]) {
-    g?.closest('.tool-group')?.classList.toggle('disabled', off);
-  }
+  const t = brushProfile().type;
+  const taperOff = t === 'broad';                  // 锋/皴：仅斗笔不可用
+  const holdOff = !(t === 'fine' || t === 'soft'); // 停笔顺线：仅工笔/羊毫
+  const taperGroup = (toolsLeft.querySelector('.brush-item[data-kind="taper"]')
+    || toolsLeft.querySelector('.brush-item[data-kind="cun"]'))?.closest('.tool-group');
+  taperGroup?.classList.toggle('disabled', taperOff);
+  const holdItem = toolsLeft.querySelector('.brush-item[data-kind="hold"]');
+  holdItem?.classList.toggle('disabled', holdOff);
+  holdItem?.closest('.tool-group')?.classList.toggle('disabled', holdOff);
 }
 
 function refreshSel() {
   const tierId = state.sizeByBrush[state.brush.id] || 'bao';
+  const isBristle = state.brush.type === 'bristle';
   for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="brush"]'))
     it.classList.toggle('sel', it.dataset.id === state.brush.id);
-  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="taper"]'))
-    it.classList.toggle('sel', it.dataset.id === state.strokeTaper);
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="taper"]')) {
+    it.classList.toggle('hidden', isBristle);
+    it.classList.toggle('sel', !isBristle && it.dataset.id === state.strokeTaper);
+  }
+  for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="cun"]')) {
+    it.classList.toggle('hidden', !isBristle);
+    it.classList.toggle('sel', isBristle && it.dataset.id === state.cun);
+  }
+  const taperLabel = toolsLeft.querySelector('.taper-label');
+  if (taperLabel) taperLabel.textContent = isBristle ? '皴' : '锋';
   for (const it of toolsLeft.querySelectorAll('.brush-item[data-kind="size"]'))
     it.classList.toggle('sel', it.dataset.id === tierId);
   for (const it of toolsLeft.querySelectorAll('.ink-dot'))
@@ -2083,13 +2240,16 @@ function makeComposite(w) {
   return c;
 }
 
+// 画廊存档以逻辑分辨率为基准（scale=1 即 1000 宽），控制 localStorage 体积；
+// 导出成图另走 DEV 全分辨率，互不影响
 function inkDataURL(scale) {
-  const flat = flattenInk();
-  if (scale >= 1) return flat.toDataURL('image/png');
+  const flat = flattenInk();   // DEV 尺寸
+  const w = Math.round(CANVAS_W * scale), h = Math.round(CANVAS_H * scale);
   const c = document.createElement('canvas');
-  c.width = Math.round(CANVAS_W * scale);
-  c.height = Math.round(CANVAS_H * scale);
-  c.getContext('2d').drawImage(flat, 0, 0, c.width, c.height);
+  c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  x.imageSmoothingEnabled = true;
+  x.drawImage(flat, 0, 0, w, h);
   return c.toDataURL('image/png');
 }
 
@@ -2118,12 +2278,12 @@ function saveCurrent() {
     persistWorks(works);
   };
 
-  try {
-    tryPersist(1);
-  } catch {
-    try { tryPersist(0.55); }
-    catch { toast('画廊存储已满，请先删除旧作'); return; }
+  // 优先存全分辨率（续画/再导出更清晰），localStorage 配额不足时逐级降级
+  let ok = false;
+  for (const scale of [SS, 1, 0.55]) {
+    try { tryPersist(scale); ok = true; break; } catch { /* 配额不足，降级重试 */ }
   }
+  if (!ok) { toast('画廊存储已满，请先删除旧作'); return; }
   state.unsaved = false;
   toast('已收入画廊');
 }
@@ -2133,7 +2293,8 @@ function randomName() {
 }
 
 function exportPNG() {
-  const url = makeComposite(CANVAS_W).toDataURL('image/png');
+  // 全分辨率成图：DEV 像素直出，清晰度随 SS 提升
+  const url = makeComposite(DEV_W).toDataURL('image/png');
   const a = document.createElement('a');
   a.href = url;
   a.download = (titleInput.value.trim() || '墨韵') + '.png';
