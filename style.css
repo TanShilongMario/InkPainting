@@ -439,6 +439,26 @@ body {
   margin: 4px 0;
 }
 
+/* 动作按钮悬浮提示：固定定位在按钮右侧，不受工具栏溢出裁剪 */
+#action-tip {
+  position: fixed;
+  transform: translateY(-50%) translateX(-4px);
+  white-space: nowrap;
+  font-family: var(--serif);
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #f3ede0;
+  background: rgba(48, 42, 34, 0.94);
+  padding: 5px 10px;
+  border-radius: 3px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 200;
+}
+#action-tip.show { opacity: 1; transform: translateY(-50%) translateX(0); }
+@media (max-width: 920px) { #action-tip { display: none; } }
+
 /* 画布舞台：左右等宽留白，画布始终居中（左栏加宽也不挤偏） */
 #stage {
   flex: 1;

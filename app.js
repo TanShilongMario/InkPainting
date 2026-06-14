@@ -1703,6 +1703,7 @@ function placeInscription(p) {
   ink.globalAlpha = 1;
   state.unsaved = true;
   dirty = true;
+  recStep();
   toast('题款已成');
 }
 
@@ -1720,6 +1721,7 @@ function placeSeal(p) {
   ink.restore();
   state.unsaved = true;
   dirty = true;
+  recStep();
   toast('钤印已成');
 }
 
@@ -1898,6 +1900,7 @@ window.addEventListener('pointerup', () => {
     finalizeStrokeLength(state.stroke);
     finishStroke();
     commitStroke();
+    recStep();   // 一笔 / 一次水洗落定，记一帧
   }
   state.painting = false;
   holdProgress = 0;
@@ -2011,18 +2014,21 @@ function buildActionBar() {
   toolbar.innerHTML = '';
   const gAct = el('div', 'tool-group action-group');
   const acts = [
-    ['撤笔', undo],
-    ['涤纸', clearPaper],
+    ['撤笔', undo, false, '撤回上一笔'],
+    ['涤纸', clearPaper, false, '清空当前画纸'],
     null,
-    ['入藏', saveCurrent, true],
-    ['成图', exportPNG],
+    ['入藏', saveCurrent, true, '收入画廊收藏'],
+    ['成图', exportPNG, false, '导出当前画作'],
+    ['成列', exportGifProcess, false, '绘画过程 · 动图 GIF'],
+    ['成影', exportWebmProcess, false, '绘画过程 · 短片 WebM'],
     null,
-    ['画廊', backToGallery],
+    ['画廊', backToGallery, false, '返回画廊'],
   ];
   for (const a of acts) {
     if (!a) { gAct.append(el('div', 'action-sep')); continue; }
     const btn = el('button', 'action-btn' + (a[2] ? ' primary' : ''), a[0]);
     btn.onclick = a[1];
+    if (a[3]) bindTip(btn, a[3]);
     gAct.append(btn);
   }
   toolbar.append(gAct);
@@ -2214,18 +2220,70 @@ function clearPaper() {
   resetFluid();
   state.unsaved = true;
   dirty = true;
+  recReset(true);   // 涤纸后重新起录
 }
 
 /* ───────────── 画廊与存储 ───────────── */
 
-const STORE_KEY = 'inkpaint.works';
+const STORE_KEY = 'inkpaint.works';   // 旧 localStorage 键，仅用于一次性迁移
 const titleInput = $('#work-title');
 
-const loadWorks = () => {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); }
+/* 画作存储改用 IndexedDB：容量远大于 localStorage（满分辨率 PNG dataURL 体积大，
+   旧方案约 5MB 配额几张即满），并支持异步存取大对象 */
+const DB_NAME = 'inkpaint', DB_STORE = 'works', DB_VER = 1;
+let dbPromise = null;
+
+function openDB() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    let req;
+    try { req = indexedDB.open(DB_NAME, DB_VER); }
+    catch (e) { reject(e); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(DB_STORE))
+        db.createObjectStore(DB_STORE, { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+// 统一事务封装：以事务完成（oncomplete）为准，确保写入真正落盘
+function idbReq(mode, fn) {
+  return openDB().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, mode);
+    let out;
+    const r = fn(tx.objectStore(DB_STORE));
+    if (r) r.onsuccess = () => { out = r.result; };
+    tx.oncomplete = () => resolve(out);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  }));
+}
+
+const idbAll = () => idbReq('readonly', s => s.getAll());
+const idbGet = id => idbReq('readonly', s => s.get(id));
+const idbPut = work => idbReq('readwrite', s => s.put(work));
+const idbDelete = id => idbReq('readwrite', s => s.delete(id));
+
+async function loadWorks() {
+  try { return await idbAll(); }
   catch { return []; }
-};
-const persistWorks = arr => localStorage.setItem(STORE_KEY, JSON.stringify(arr));
+}
+
+// 一次性迁移：旧 localStorage 画作搬入 IndexedDB 后清键，释放配额
+async function migrateFromLocal() {
+  let old;
+  try { old = JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); }
+  catch { return; }
+  if (!Array.isArray(old) || !old.length) return;
+  try {
+    for (const w of old) if (w && w.id) await idbPut(w);
+    localStorage.removeItem(STORE_KEY);
+  } catch { /* 迁移失败保留旧数据，下次再试 */ }
+}
 
 function makeComposite(w) {
   const h = Math.round(w * CANVAS_H / CANVAS_W);
@@ -2240,7 +2298,179 @@ function makeComposite(w) {
   return c;
 }
 
-// 画廊存档以逻辑分辨率为基准（scale=1 即 1000 宽），控制 localStorage 体积；
+/* ───────────── 绘画过程录制 · 成列(GIF) / 成影(WebM) ───────────── */
+
+// 后台轻量记帧：每个落定动作（成笔 / 水洗 / 题款 / 钤印）后按自适应步距存一帧缩略合成图；
+// 帧数封顶后隔帧抽稀并加大步距，作画再久帧数与内存仍可控（移动端取更低预算）
+const REC = {
+  w: IS_COARSE ? 300 : 388,     // 帧工作宽度，竖幅长边约 540
+  cap: IS_COARSE ? 36 : 60,     // 帧数封顶
+  frames: [],
+  step: 0,
+  every: 1,
+};
+REC.h = Math.round(REC.w * CANVAS_H / CANVAS_W);
+
+// 取快照前先刷新流体小图，确保水墨晕染如实入帧
+function recSnapshot() {
+  renderFluid();
+  return makeComposite(REC.w);
+}
+
+function recReset(captureFirst) {
+  REC.frames.length = 0;
+  REC.step = 0;
+  REC.every = 1;
+  if (captureFirst) REC.frames.push(recSnapshot());
+}
+
+function recStep() {
+  if (++REC.step < REC.every) return;
+  REC.step = 0;
+  REC.frames.push(recSnapshot());
+  if (REC.frames.length > REC.cap) {
+    const kept = [];
+    for (let i = 0; i < REC.frames.length; i += 2) kept.push(REC.frames[i]);
+    const last = REC.frames[REC.frames.length - 1];
+    if (kept[kept.length - 1] !== last) kept.push(last);
+    REC.frames = kept;
+    REC.every *= 2;     // 后续抽帧步距同步加大，保持时间密度均匀
+  }
+}
+
+// 均匀采样到 n 帧，首末必取
+function recPick(frames, n) {
+  if (frames.length <= n) return frames.slice();
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(frames[Math.round(i * (frames.length - 1) / (n - 1))]);
+  return out;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function downloadBlob(blob, suffix) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (titleInput.value.trim() || '墨韵') + suffix;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+const PROC_DELAY = 120, PROC_HOLD = 1300;   // 每帧约 120ms ≈ 8fps，终帧停留约 1.3s
+
+// ── 成列：过程 GIF（全局调色板 + 逐级降级，保证 ≤ 5MB）──
+const GIF_MAX_BYTES = 5 * 1024 * 1024;
+const GIF_TIERS = [
+  { w: REC.w,                     frames: 50, colors: 128 },
+  { w: REC.w,                     frames: 38, colors: 96  },
+  { w: Math.round(REC.w * 0.84),  frames: 34, colors: 64  },
+  { w: Math.round(REC.w * 0.72),  frames: 28, colors: 48  },
+  { w: Math.round(REC.w * 0.62),  frames: 22, colors: 32  },
+];
+
+async function encodeGif(srcFrames, tier) {
+  const { GIFEncoder, quantize, applyPalette } = window.gifenc;
+  const picks = recPick(srcFrames, tier.frames);
+  const w = tier.w, h = Math.round(w * CANVAS_H / CANVAS_W);
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  const tx = tmp.getContext('2d');
+  tx.imageSmoothingEnabled = true;
+
+  // 以终帧（墨色最全）定全局调色板，整段共用：色表只写一次，无逐帧闪烁，体积更小
+  tx.drawImage(picks[picks.length - 1], 0, 0, w, h);
+  const palette = quantize(tx.getImageData(0, 0, w, h).data, tier.colors);
+
+  const enc = GIFEncoder();
+  for (let k = 0; k < picks.length; k++) {
+    tx.clearRect(0, 0, w, h);
+    tx.drawImage(picks[k], 0, 0, w, h);
+    const index = applyPalette(tx.getImageData(0, 0, w, h).data, palette);
+    const isLast = k === picks.length - 1;
+    if (k === 0) enc.writeFrame(index, w, h, { palette, delay: PROC_DELAY, repeat: 0 });
+    else enc.writeFrame(index, w, h, { delay: isLast ? PROC_HOLD : PROC_DELAY });
+    if ((k & 3) === 3) await sleep(0);   // 让出主线程，避免编码卡 UI
+  }
+  enc.finish();
+  return enc.bytes();
+}
+
+let gifBusy = false;
+async function exportGifProcess() {
+  if (gifBusy) return;
+  if (!window.gifenc) { toast('成列组件未就绪'); return; }
+  const frames = [...REC.frames, recSnapshot()];
+  if (frames.length < 2) { toast('过程太短，先落几笔'); return; }
+  gifBusy = true;
+  toast('正在成列…');
+  try {
+    let bytes = null;
+    for (const tier of GIF_TIERS) {
+      bytes = await encodeGif(frames, tier);
+      if (bytes.length <= GIF_MAX_BYTES) break;
+    }
+    downloadBlob(new Blob([bytes], { type: 'image/gif' }), '·过程.gif');
+    const mb = (bytes.length / 1048576).toFixed(1);
+    toast(bytes.length <= GIF_MAX_BYTES ? `成列已成 · ${mb}MB` : `成列已成 · ${mb}MB（已尽力压缩）`);
+  } catch (e) {
+    console.error(e);
+    toast('成列失败');
+  } finally {
+    gifBusy = false;
+  }
+}
+
+// ── 成影：过程短片（浏览器原生 MediaRecorder，零依赖、体积小、无色带）──
+// 优先 WebM/VP9，Safari 等不支持 WebM 时回退 MP4
+function pickVideoMime() {
+  if (!window.MediaRecorder) return '';
+  for (const m of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
+                   'video/mp4;codecs=avc1', 'video/mp4'])
+    if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+let webmBusy = false;
+async function exportWebmProcess() {
+  if (webmBusy) return;
+  const mime = pickVideoMime();
+  if (!mime) { toast('此浏览器不支持成影'); return; }
+  const frames = [...REC.frames, recSnapshot()];
+  if (frames.length < 2) { toast('过程太短，先落几笔'); return; }
+  const isMp4 = mime.startsWith('video/mp4');
+  webmBusy = true;
+  toast('正在成影…');
+  try {
+    const w = REC.w, h = REC.h;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const cx = cv.getContext('2d');
+    cx.drawImage(frames[0], 0, 0, w, h);
+    const recr = new MediaRecorder(cv.captureStream(30), { mimeType: mime, videoBitsPerSecond: 5e6 });
+    const chunks = [];
+    recr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(res => { recr.onstop = res; });
+    recr.start();
+    for (let i = 0; i < frames.length; i++) {
+      cx.clearRect(0, 0, w, h);
+      cx.drawImage(frames[i], 0, 0, w, h);
+      await sleep(i === frames.length - 1 ? PROC_HOLD : PROC_DELAY);
+    }
+    recr.stop();
+    await stopped;
+    downloadBlob(new Blob(chunks, { type: isMp4 ? 'video/mp4' : 'video/webm' }),
+      isMp4 ? '·过程.mp4' : '·过程.webm');
+    toast('成影已成');
+  } catch (e) {
+    console.error(e);
+    toast('成影失败');
+  } finally {
+    webmBusy = false;
+  }
+}
+
+// 画廊存档墨图：scale 控制存档分辨率（IndexedDB 容量充足，入藏直存 SS 全分辨率）；
 // 导出成图另走 DEV 全分辨率，互不影响
 function inkDataURL(scale) {
   const flat = flattenInk();   // DEV 尺寸
@@ -2253,37 +2483,26 @@ function inkDataURL(scale) {
   return c.toDataURL('image/png');
 }
 
-function saveCurrent() {
-  const works = loadWorks();
+async function saveCurrent() {
   const name = titleInput.value.trim() || randomName();
   titleInput.value = name;
-  const base = {
+  // IndexedDB 容量充足，直存 SS 全分辨率（续画 / 再导出更清晰）
+  const work = {
+    id: state.editingId || ('w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
     name,
     paper: state.paper.id,
     date: Date.now(),
     thumb: makeComposite(320).toDataURL('image/jpeg', 0.82),
+    ink: inkDataURL(SS),
   };
-
-  const tryPersist = scale => {
-    const work = { ...base, ink: inkDataURL(scale) };
-    if (state.editingId) {
-      work.id = state.editingId;
-      const i = works.findIndex(w => w.id === work.id);
-      if (i >= 0) works[i] = work; else works.push(work);
-    } else {
-      work.id = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      works.push(work);
-      state.editingId = work.id;
-    }
-    persistWorks(works);
-  };
-
-  // 优先存全分辨率（续画/再导出更清晰），localStorage 配额不足时逐级降级
-  let ok = false;
-  for (const scale of [SS, 1, 0.55]) {
-    try { tryPersist(scale); ok = true; break; } catch { /* 配额不足，降级重试 */ }
+  try {
+    await idbPut(work);
+  } catch (e) {
+    console.error(e);
+    toast('画廊存储失败');
+    return;
   }
-  if (!ok) { toast('画廊存储已满，请先删除旧作'); return; }
+  state.editingId = work.id;
   state.unsaved = false;
   toast('已收入画廊');
 }
@@ -2302,10 +2521,10 @@ function exportPNG() {
   toast('已成图');
 }
 
-function renderGallery() {
+async function renderGallery() {
+  const works = (await loadWorks()).sort((a, b) => b.date - a.date);
   const grid = $('#gallery-grid');
   for (const old of grid.querySelectorAll('.work-card')) old.remove();
-  const works = loadWorks().sort((a, b) => b.date - a.date);
   $('#gallery-empty').classList.toggle('hidden', works.length > 0);
 
   for (const w of works) {
@@ -2322,8 +2541,7 @@ function renderGallery() {
     card.querySelector('.work-del').onclick = e => {
       e.stopPropagation();
       if (!confirm(`将「${w.name}」从画廊中移除？`)) return;
-      persistWorks(loadWorks().filter(x => x.id !== w.id));
-      renderGallery();
+      idbDelete(w.id).then(renderGallery).catch(() => toast('删除失败'));
     };
     grid.append(card);
   }
@@ -2355,11 +2573,12 @@ function newWork() {
   paintPaper();
   titleInput.value = randomName();
   refreshSel();
+  recReset(true);   // 从空白宣纸起录过程
   showPaint();
 }
 
-function openWork(id) {
-  const w = loadWorks().find(x => x.id === id);
+async function openWork(id) {
+  const w = await idbGet(id).catch(() => null);
   if (!w) return;
   state.editingId = id;
   state.unsaved = false;
@@ -2371,8 +2590,9 @@ function openWork(id) {
   genPerm();
   paintPaper();
   titleInput.value = w.name;
+  recReset(false);
   const img = new Image();
-  img.onload = () => { ink.drawImage(img, 0, 0, CANVAS_W, CANVAS_H); dirty = true; };
+  img.onload = () => { ink.drawImage(img, 0, 0, CANVAS_W, CANVAS_H); dirty = true; recReset(true); };
   img.src = w.ink;
   refreshSel();
   showPaint();
@@ -2384,6 +2604,25 @@ function backToGallery() {
 }
 
 /* ───────────── 提示 ───────────── */
+
+// 悬浮提示：单挂 body，避免被工具栏溢出裁剪；仅鼠标悬停触发
+const tipEl = document.createElement('div');
+tipEl.id = 'action-tip';
+document.body.append(tipEl);
+
+function bindTip(btn, text) {
+  btn.addEventListener('pointerenter', e => {
+    if (e.pointerType === 'touch') return;
+    const r = btn.getBoundingClientRect();
+    tipEl.textContent = text;
+    tipEl.style.left = (r.right + 12) + 'px';
+    tipEl.style.top = (r.top + r.height / 2) + 'px';
+    tipEl.classList.add('show');
+  });
+  const hide = () => tipEl.classList.remove('show');
+  btn.addEventListener('pointerleave', hide);
+  btn.addEventListener('click', hide);
+}
 
 let toastTimer = null;
 
@@ -2409,5 +2648,5 @@ $('#btn-new').onclick = newWork;
 buildToolbar();
 genPerm();
 paintPaper();
-renderGallery();
+migrateFromLocal().then(renderGallery);
 loop();

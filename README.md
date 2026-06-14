@@ -5,7 +5,7 @@
 一款纯前端的网页水墨画绘制工具。无需安装、无需服务器，在浏览器中即可体验中国传统水墨的笔意与晕染。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-![Version](https://img.shields.io/badge/version-v1.1-green.svg)
+![Version](https://img.shields.io/badge/version-v1.2-green.svg)
 ![Stack](https://img.shields.io/badge/stack-HTML%20%2B%20CSS%20%2B%20JS-orange.svg)
 
 **仓库**：[github.com/TanShilongMario/InkPainting](https://github.com/TanShilongMario/InkPainting)
@@ -17,13 +17,16 @@
 ## 特性
 
 - **四支毛笔** — 狼毫工笔、羊毫写意、散锋皴擦、斗笔泼墨，各有笔性；每笔可调「毫」级粗细
+- **四种皴法** — 散锋笔下披麻 / 斧劈 / 雨点 / 卷云，写山石肌理
 - **八级墨干湿** — 从焦墨到烟墨，控制浓淡、干燥与洇散
 - **八种古典色** — 玄墨、花青、朱砂、藤黄……设色如山水
 - **四种宣纸** — 玉版宣、仿古宣、茶笺、月白笺，带纤维肌理
 - **流体晕染** — 湿墨落笔后持续渗化，指状洇散如生宣吸墨；干透的墨固着于纸，更难被水洗打散
 - **清水笔** — 破墨、冲墨，墨随水走；共用笔刷大小与墨级设定
 - **题款钤印** — 竖排题词 / 阴刻·阳刻印章；多字体、三档字号；简体输入自动转繁
-- **本地画廊** — 作品收入册页，随时续画或导出 PNG
+- **高清成图** — 内部超采样渲染，导出 PNG 更清晰而相对笔触/字号不变
+- **过程留影** — 后台记录绘制步骤，一键「成列」导出过程 GIF（≤5MB）或「成影」导出 WebM/MP4 短片
+- **本地画廊** — 作品以 IndexedDB 收入册页，容量充足，随时续画
 - **移动端** — 两侧文房抽屉 + 底部功能栏，触屏可画（Phase A）
 
 ---
@@ -63,7 +66,7 @@ python3 -m http.server 8080 --bind 0.0.0.0
 | 撤销 | `Ctrl/Cmd + Z` | 底部「撤笔」 |
 | 选笔 / 毫 / 墨 / 色 | 画布左侧工具栏 | 点「笔墨」抽屉 |
 | 选纸 / 水 / 题款 / 钤印 | 画布右侧工具栏 | 点「纸印」抽屉 |
-| 保存 / 导出 / 画廊 | 左侧功能栏 | 点「功能」底栏 |
+| 入藏 / 成图 / 成列 / 成影 / 画廊 | 左侧功能栏 | 点「功能」底栏 |
 | 题款 | 「题款」→ 填写 → 点选位置 | 同上 |
 | 钤印 | 「钤印」→ 选印式字体 → 点选位置 | 同上 |
 
@@ -75,9 +78,10 @@ python3 -m http.server 8080 --bind 0.0.0.0
 InkPainting/
 ├── index.html          # 画廊 + 绘制双视图
 ├── style.css           # 中国风 UI（含移动端断点）
-├── app.js              # 水墨引擎（~2000 行）
+├── app.js              # 水墨引擎（~2600 行）
 ├── s2t.js              # 简繁转换字表（OpenCC 单字映射）
 ├── scripts/gen-s2t.js  # 字表生成脚本
+├── vendor/gifenc.js    # GIF 编码器（单文件，MIT）
 ├── PRD.md              # 产品需求文档
 ├── Architecture.md     # 技术架构说明
 ├── Mobile.md           # 移动端适配规划与进度
@@ -94,10 +98,11 @@ InkPainting/
 | 标记 | HTML5 |
 | 样式 | CSS3（CSS 变量、竖排书写、Grid、媒体查询） |
 | 逻辑 | 原生 JavaScript（ES6+，strict mode） |
-| 渲染 | Canvas 2D API |
+| 渲染 | Canvas 2D API（超采样高清成图） |
 | 模拟 | 细胞自动机流体渗流 + 减色混合 + 颜料固着 |
-| 存储 | localStorage |
-| 字体 | Google Fonts（Ma Shan Zheng、Noto Serif SC） |
+| 导出 | PNG · GIF（gifenc）· WebM/MP4（MediaRecorder） |
+| 存储 | IndexedDB（旧 localStorage 数据自动迁移） |
+| 字体 | Google Fonts 中国镜像（Ma Shan Zheng、Noto Serif SC/TC 等） |
 
 ---
 
@@ -110,6 +115,26 @@ InkPainting/
 ---
 
 ## 版本日志
+
+### v1.2 · 2026-06-14
+
+**绘制过程导出**
+
+- 「成列」导出过程 GIF：后台自适应抽帧（封顶并隔帧抽稀），全局调色板，逐级降级保证 ≤ 5MB
+- 「成影」导出过程短片：浏览器原生 MediaRecorder，WebM 优先、Safari/iOS 回退 MP4，体积小无色带
+
+**高清与皴法**
+
+- 内部超采样渲染：成图更清晰，而笔触大小、字号等相对设定保持不变
+- 散锋四种皴法（披麻 / 斧劈 / 雨点 / 卷云）；停笔顺线曲线采样加密
+
+**存储与字体**
+
+- 画廊存储改用 IndexedDB，容量充足，入藏直存全分辨率；旧 localStorage 数据自动迁移
+- 字体改走 Google 官方中国镜像（`fonts.googleapis.cn`），国内加载稳定；失败回退系统字体
+- 题款 / 钤印补 Noto Serif TC，繁体字形更地道；印章边缘破损与做旧改为轻微
+
+---
 
 ### v1.1 · 2026-06-11
 
@@ -155,9 +180,9 @@ InkPainting/
 
 本项目刻意保持克制：
 
-- 单文件引擎，零构建依赖
-- 简单撤销（桌面 24 步 / 触屏 5 步），无图层系统
-- 本地存储，无云端与账户
+- 单文件引擎，零构建依赖（仅内置一个单文件 GIF 编码器）
+- 简单撤销（桌面 10 步 / 触屏 3 步），无图层系统
+- 本地存储（IndexedDB），无云端与账户
 - 东方审美 UI：留白、竖排、朱砂点缀
 
 ---
