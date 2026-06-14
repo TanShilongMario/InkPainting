@@ -2020,7 +2020,7 @@ function buildActionBar() {
     ['入藏', saveCurrent, true, '收入画廊收藏'],
     ['成图', exportPNG, false, '导出当前画作'],
     ['成列', exportGifProcess, false, '绘画过程 · 动图 GIF'],
-    ['成影', exportWebmProcess, false, '绘画过程 · 短片 WebM'],
+    ['成影', exportWebmProcess, false, '绘画过程 · 高清短片 MP4'],
     null,
     ['画廊', backToGallery, false, '返回画廊'],
   ];
@@ -2303,7 +2303,7 @@ function makeComposite(w) {
 // 后台轻量记帧：每个落定动作（成笔 / 水洗 / 题款 / 钤印）后按自适应步距存一帧缩略合成图；
 // 帧数封顶后隔帧抽稀并加大步距，作画再久帧数与内存仍可控（移动端取更低预算）
 const REC = {
-  w: IS_COARSE ? 300 : 388,     // 帧工作宽度，竖幅长边约 540
+  w: IS_COARSE ? 392 : 540,     // 帧工作宽度，竖幅长边约 545/750（供成影放大与 GIF 降采样）
   cap: IS_COARSE ? 36 : 60,     // 帧数封顶
   frames: [],
   step: 0,
@@ -2360,19 +2360,20 @@ function downloadBlob(blob, suffix) {
 const PROC_DELAY = 120, PROC_HOLD = 1300;   // 每帧约 120ms ≈ 8fps，终帧停留约 1.3s
 
 // ── 成列：过程 GIF（全局调色板 + 逐级降级，保证 ≤ 5MB）──
+// GIF 宽度与录制源帧解耦，固定走较小尺寸（GIF 体积敏感，源帧仅供降采样）
 const GIF_MAX_BYTES = 5 * 1024 * 1024;
 const GIF_TIERS = [
-  { w: REC.w,                     frames: 50, colors: 128 },
-  { w: REC.w,                     frames: 38, colors: 96  },
-  { w: Math.round(REC.w * 0.84),  frames: 34, colors: 64  },
-  { w: Math.round(REC.w * 0.72),  frames: 28, colors: 48  },
-  { w: Math.round(REC.w * 0.62),  frames: 22, colors: 32  },
+  { w: 388, frames: 50, colors: 128 },
+  { w: 388, frames: 38, colors: 96  },
+  { w: 330, frames: 34, colors: 64  },
+  { w: 288, frames: 28, colors: 48  },
+  { w: 248, frames: 22, colors: 32  },
 ];
 
 async function encodeGif(srcFrames, tier) {
   const { GIFEncoder, quantize, applyPalette } = window.gifenc;
   const picks = recPick(srcFrames, tier.frames);
-  const w = tier.w, h = Math.round(w * CANVAS_H / CANVAS_W);
+  const w = Math.min(tier.w, REC.w), h = Math.round(w * CANVAS_H / CANVAS_W);
   const tmp = document.createElement('canvas');
   tmp.width = w; tmp.height = h;
   const tx = tmp.getContext('2d');
@@ -2421,15 +2422,18 @@ async function exportGifProcess() {
   }
 }
 
-// ── 成影：过程短片（浏览器原生 MediaRecorder，零依赖、体积小、无色带）──
-// 优先 WebM/VP9，Safari 等不支持 WebM 时回退 MP4
+// ── 成影：过程短片（浏览器原生 MediaRecorder）──
+// 优先 MP4/H.264（兼容性最佳、可直接发），浏览器不支持录 MP4 时回退 WebM
 function pickVideoMime() {
   if (!window.MediaRecorder) return '';
-  for (const m of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm',
-                   'video/mp4;codecs=avc1', 'video/mp4'])
+  for (const m of ['video/mp4;codecs=avc1.4d002a', 'video/mp4;codecs=avc1', 'video/mp4',
+                   'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'])
     if (MediaRecorder.isTypeSupported(m)) return m;
   return '';
 }
+
+// 成影输出长边（竖幅，至少 1K）；源帧高质量放大到此尺寸
+const VIDEO_LONG = 1080;
 
 let webmBusy = false;
 async function exportWebmProcess() {
@@ -2442,12 +2446,15 @@ async function exportWebmProcess() {
   webmBusy = true;
   toast('正在成影…');
   try {
-    const w = REC.w, h = REC.h;
+    // 仅视频提高分辨率：长边 ≥ 1K，宽按画幅比例换算（保持偶数，编码器友好）
+    const h = VIDEO_LONG, w = Math.round(h * CANVAS_W / CANVAS_H / 2) * 2;
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
     const cx = cv.getContext('2d');
+    cx.imageSmoothingEnabled = true;
+    cx.imageSmoothingQuality = 'high';
     cx.drawImage(frames[0], 0, 0, w, h);
-    const recr = new MediaRecorder(cv.captureStream(30), { mimeType: mime, videoBitsPerSecond: 5e6 });
+    const recr = new MediaRecorder(cv.captureStream(30), { mimeType: mime, videoBitsPerSecond: 8e6 });
     const chunks = [];
     recr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     const stopped = new Promise(res => { recr.onstop = res; });

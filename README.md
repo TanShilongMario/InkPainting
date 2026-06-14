@@ -25,7 +25,7 @@
 - **清水笔** — 破墨、冲墨，墨随水走；共用笔刷大小与墨级设定
 - **题款钤印** — 竖排题词 / 阴刻·阳刻印章；多字体、三档字号；简体输入自动转繁
 - **高清成图** — 内部超采样渲染，导出 PNG 更清晰而相对笔触/字号不变
-- **过程留影** — 后台记录绘制步骤，一键「成列」导出过程 GIF（≤5MB）或「成影」导出 WebM/MP4 短片
+- **过程留影** — 后台记录绘制步骤，一键「成列」导出过程 GIF（≤5MB）或「成影」导出 ≥1K 高清短片（MP4 优先）
 - **本地画廊** — 作品以 IndexedDB 收入册页，容量充足，随时续画
 - **移动端** — 两侧文房抽屉 + 底部功能栏，触屏可画（Phase A）
 
@@ -100,7 +100,7 @@ InkPainting/
 | 逻辑 | 原生 JavaScript（ES6+，strict mode） |
 | 渲染 | Canvas 2D API（超采样高清成图） |
 | 模拟 | 细胞自动机流体渗流 + 减色混合 + 颜料固着 |
-| 导出 | PNG · GIF（gifenc）· WebM/MP4（MediaRecorder） |
+| 导出 | PNG · GIF（gifenc）· MP4/WebM（MediaRecorder，视频 ≥1K） |
 | 存储 | IndexedDB（旧 localStorage 数据自动迁移） |
 | 字体 | Google Fonts 中国镜像（Ma Shan Zheng、Noto Serif SC/TC 等） |
 
@@ -121,7 +121,7 @@ InkPainting/
 **绘制过程导出**
 
 - 「成列」导出过程 GIF：后台自适应抽帧（封顶并隔帧抽稀），全局调色板，逐级降级保证 ≤ 5MB
-- 「成影」导出过程短片：浏览器原生 MediaRecorder，WebM 优先、Safari/iOS 回退 MP4，体积小无色带
+- 「成影」导出过程短片：浏览器原生 MediaRecorder，MP4 优先（不支持时回退 WebM），输出 ≥1K 高清
 
 **高清与皴法**
 
